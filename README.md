@@ -23,6 +23,7 @@ This module fulfills that role for MapLibre Native.
 
 ## Role in the architecture
 
+```
 ┌────────────────────────────────────────────┐
 │ Application / App Logic                    │
 ├────────────────────────────────────────────┤
@@ -42,6 +43,7 @@ This module fulfills that role for MapLibre Native.
 ├────────────────────────────────────────────┤
 │ MapLibre Native SDK for iOS                │
 └────────────────────────────────────────────┘
+```
 
 In this architecture:
 
