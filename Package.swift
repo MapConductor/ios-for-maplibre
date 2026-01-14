@@ -14,7 +14,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.0.0"),
-        .package(url: "https://github.com/maplibre/maplibre-gl-native-distribution", from: "6.21.2"),
+        .package(url: "https://github.com/maplibre/maplibre-gl-native-distribution", from: "6.20.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
