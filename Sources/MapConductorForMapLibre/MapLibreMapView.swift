@@ -310,6 +310,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
 
         func mapView(_ mapView: MLNMapView, regionWillChangeAnimated animated: Bool) {
             let camera = currentCameraPosition(from: mapView)
+            polylineController?.setCurrentCameraPosition(camera)
             controller?.notifyCameraMoveStart(camera)
             onCameraMoveStart?(camera)
             // Removed async Task calls to prevent crashes
@@ -323,6 +324,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         func mapViewRegionIsChanging(_ mapView: MLNMapView) {
             let camera = currentCameraPosition(from: mapView)
             state.updateCameraPosition(camera)
+            polylineController?.setCurrentCameraPosition(camera)
             controller?.notifyCameraMove(camera)
             onCameraMove?(camera)
             // Removed async Task calls to prevent crashes
@@ -336,6 +338,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         func mapView(_ mapView: MLNMapView, regionDidChangeAnimated animated: Bool) {
             let camera = currentCameraPosition(from: mapView)
             state.updateCameraPosition(camera)
+            polylineController?.setCurrentCameraPosition(camera)
             controller?.notifyCameraMoveEnd(camera)
             onCameraMoveEnd?(camera)
             // Removed async Task calls to prevent crashes
@@ -349,6 +352,9 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         @objc func handleMapTap(_ recognizer: UITapGestureRecognizer) {
             guard let mapView = mapView, recognizer.state == .ended else { return }
             let point = recognizer.location(in: mapView)
+
+            // Ensure polyline hit-testing uses the current zoom even if no region-change callbacks have fired yet.
+            polylineController?.setCurrentCameraPosition(currentCameraPosition(from: mapView))
 
             if markerController?.handleTap(at: point) == true {
                 updateInfoBubbleLayouts()

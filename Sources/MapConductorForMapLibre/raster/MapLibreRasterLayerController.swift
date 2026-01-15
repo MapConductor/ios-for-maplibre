@@ -14,7 +14,7 @@ private final class MapLibreRasterNetworkDelegate: NSObject, MLNNetworkConfigura
         self.extraHeaders = extraHeaders
     }
 
-    func willSendRequest(_ request: NSMutableURLRequest) -> NSMutableURLRequest {
+    func willSend(_ request: NSMutableURLRequest) -> NSMutableURLRequest {
         lock.lock()
         let ua = userAgent
         let headers = extraHeaders
