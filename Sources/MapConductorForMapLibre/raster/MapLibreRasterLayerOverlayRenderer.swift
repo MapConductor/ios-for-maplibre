@@ -121,7 +121,7 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
 
     private func makeTileSource(id: String, source: RasterSource) -> MLNRasterTileSource {
         switch source {
-        case let .urlTemplate(template, tileSize, minZoom, maxZoom, _, _):
+        case let .urlTemplate(template, tileSize, minZoom, maxZoom, _, scheme):
             var options: [MLNTileSourceOption: Any] = [
                 .tileSize: NSNumber(value: tileSize)
             ]
@@ -131,11 +131,28 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
             if let maxZoom {
                 options[.maximumZoomLevel] = NSNumber(value: maxZoom)
             }
+            options[.tileCoordinateSystem] =
+                NSNumber(
+                    value:
+                        scheme == .TMS
+                            ? MLNTileCoordinateSystem.TMS.rawValue
+                            : MLNTileCoordinateSystem.XYZ.rawValue
+                )
             return MLNRasterTileSource(identifier: id, tileURLTemplates: [template], options: options)
-        case .tileJson:
-            fatalError("RasterSource.tileJson is not implemented for MapLibre yet.")
-        case .arcGisService:
-            fatalError("RasterSource.arcGisService is not implemented for MapLibre yet.")
+        case let .tileJson(url):
+            guard let configUrl = URL(string: url) else {
+                assertionFailure("Invalid tileJson URL: \(url)")
+                return MLNRasterTileSource(identifier: id, tileURLTemplates: ["about:blank"], options: nil)
+            }
+            return MLNRasterTileSource(identifier: id, configurationURL: configUrl)
+        case let .arcGisService(serviceUrl):
+            let base = serviceUrl.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let template = "\(base)/tile/{z}/{y}/{x}"
+            var options: [MLNTileSourceOption: Any] = [
+                .tileSize: NSNumber(value: RasterSource.defaultTileSize),
+                .tileCoordinateSystem: NSNumber(value: MLNTileCoordinateSystem.XYZ.rawValue),
+            ]
+            return MLNRasterTileSource(identifier: id, tileURLTemplates: [template], options: options)
         }
     }
 }

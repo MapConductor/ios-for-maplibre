@@ -5,3 +5,5 @@ Secrets.*
 .*
 !.gitignore
 !.gitkeep
+Packages/
+Package.resolved
