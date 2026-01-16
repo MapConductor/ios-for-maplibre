@@ -37,7 +37,7 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
 
         removeSourceAndLayerIfExists(style: style, sourceId: sourceId, layerId: layerId)
 
-        let tileTemplate = tileServer.urlTemplate(routeId: routeId, version: 0)
+        let tileTemplate = buildTileTemplate(routeId: routeId, tileSize: state.tileSize, version: 0)
         let tileSource = makeTileSource(id: sourceId, template: tileTemplate, tileSize: state.tileSize)
         let layer = MLNRasterStyleLayer(identifier: layerId, source: tileSource)
         layer.rasterOpacity = NSExpression(forConstantValue: min(max(state.opacity, 0.0), 1.0))
@@ -85,7 +85,7 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
         provider.update(state: current.state, opacity: 1.0)
 
         let nextVersion = groundImage.version + 1
-        let tileTemplate = tileServer.urlTemplate(routeId: groundImage.routeId, version: nextVersion)
+        let tileTemplate = buildTileTemplate(routeId: groundImage.routeId, tileSize: current.state.tileSize, version: Int(nextVersion))
 
         removeSourceAndLayerIfExists(style: style, sourceId: groundImage.sourceId, layerId: groundImage.layerId)
 
@@ -139,6 +139,13 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
         return MLNRasterTileSource(identifier: id, tileURLTemplates: [template], options: options)
     }
 
+    private func buildTileTemplate(routeId: String, tileSize: Int, version: Int) -> String {
+        // MapLibre caches raster tiles aggressively. Ensure URL changes when bounds/image changes
+        // so the SDK issues fresh network requests rather than reusing cached tiles.
+        let base = tileServer.urlTemplate(routeId: routeId, tileSize: tileSize)
+        return "\(base)?g=\(version)"
+    }
+
     private func removeSourceAndLayerIfExists(style: MLNStyle, sourceId: String, layerId: String) {
         if let layer = style.layer(withIdentifier: layerId) {
             style.removeLayer(layer)
@@ -163,7 +170,6 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
             "mapconductor-polygons-line-",
             "mapconductor-circles-layer-",
             "mapconductor-cluster-layer-",
-            "mapconductor-raster-layer-",
             "mapconductor-markers-layer-"
         ]
         for prefix in prefixes {
