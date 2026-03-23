@@ -42,7 +42,8 @@ final class MapLibrePolygonOverlayRenderer: AbstractPolygonOverlayRenderer<[MLNP
             fillColor: state.fillColor,
             strokeColor: state.strokeColor,
             strokeWidth: state.strokeWidth,
-            zIndex: state.zIndex
+            zIndex: state.zIndex,
+            holes: state.holes
         )
     }
 
@@ -58,7 +59,8 @@ final class MapLibrePolygonOverlayRenderer: AbstractPolygonOverlayRenderer<[MLNP
             fillColor: current.state.fillColor,
             strokeColor: current.state.strokeColor,
             strokeWidth: current.state.strokeWidth,
-            zIndex: current.state.zIndex
+            zIndex: current.state.zIndex,
+            holes: current.state.holes
         )
     }
 
