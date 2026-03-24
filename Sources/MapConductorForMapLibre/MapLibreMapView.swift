@@ -267,6 +267,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
 
         func updateContent(_ content: MapViewContent) {
             infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
+            markerController?.tilingOptions = content.markerTilingOptions
             markerController?.syncMarkers(content.markers)
             updateStrategyRendering(content)
             groundImageController?.syncGroundImages(content.groundImages)

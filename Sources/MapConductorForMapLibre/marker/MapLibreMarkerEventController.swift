@@ -17,11 +17,15 @@ final class MapLibreMarkerEventController {
     }
 
     func handleTap(at point: CGPoint) -> Bool {
-        guard let markerId = markerController.renderer.markerId(at: point),
-              let state = markerController.getMarkerState(for: markerId),
-              state.clickable else { return false }
-        markerController.dispatchClick(state: state)
-        return true
+        // Check native symbol markers first.
+        if let markerId = markerController.renderer.markerId(at: point),
+           let state = markerController.getMarkerState(for: markerId),
+           state.clickable {
+            markerController.dispatchClick(state: state)
+            return true
+        }
+        // Fall back to geographic proximity search for tile-rendered markers.
+        return markerController.handleTiledMarkerTap(at: point)
     }
 
     func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {

@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreLocation
 import MapLibre
 import MapConductorCore
+import UIKit
 
 @MainActor
 final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, MapLibreMarkerRenderer> {
@@ -46,17 +47,25 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
         super.init(markerManager: markerManager, renderer: renderer)
 
         self.eventController = MapLibreMarkerEventController(mapView: mapView, markerController: self)
-        setupTileRenderer()
+    }
+
+    private static var retinaAwareTileSize: Int {
+        256 * max(1, Int(UIScreen.main.scale))
     }
 
     private func setupTileRenderer() {
         let routeId = "mapconductor-markers-\(UUID().uuidString)"
+        let contentScale = Double(UIScreen.main.scale)
+        let baseCallback = tilingOptions.iconScaleCallback
+        let scaledCallback: ((MarkerState, Int) -> Double)? = { state, zoom in
+            (baseCallback?(state, zoom) ?? 1.0) * contentScale
+        }
         let renderer = MarkerTileRenderer<MLNPointFeature>(
             markerManager: markerManager,
-            tileSize: 256,
+            tileSize: Self.retinaAwareTileSize,
             cacheSizeBytes: tilingOptions.cacheSize,
             debugTileOverlay: tilingOptions.debugTileOverlay,
-            iconScaleCallback: tilingOptions.iconScaleCallback
+            iconScaleCallback: scaledCallback
         )
         TileServerRegistry.get().register(routeId: routeId, provider: renderer)
         tileRenderer = renderer
@@ -65,7 +74,7 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
 
     func onStyleLoaded(_ style: MLNStyle) {
         isStyleLoaded = true
-        MCLog.marker("MapLibreMarkerController.onStyleLoaded")
+        MCLog.marker("MapLibreMarkerController.onStyleLoaded tiledCount=\(tiledMarkerIds.count) latestStates=\(latestStates.count)")
         renderer.onStyleLoaded(style)
         // Re-attach tile raster layer if there are already tiled markers
         if !tiledMarkerIds.isEmpty {
@@ -166,26 +175,34 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
 
     override func add(data: [MarkerState]) async {
         guard tilingOptions.enabled else {
+            MCLog.marker("MapLibreMarkerController.add tilingDisabled count=\(data.count)")
             await super.add(data: data)
             return
         }
+        if tileRenderer == nil { setupTileRenderer() }
 
         let shouldTileAll = data.count >= tilingOptions.minMarkerCount
+        MCLog.marker("MapLibreMarkerController.add count=\(data.count) minMarkerCount=\(tilingOptions.minMarkerCount) shouldTileAll=\(shouldTileAll)")
+        var localTiledMarkerIds = tiledMarkerIds
         let result = await MarkerIngestionEngine.ingest(
             data: data,
             markerManager: markerManager,
             renderer: renderer,
             defaultMarkerIcon: defaultMarkerIconForTiling,
             tilingEnabled: tilingOptions.enabled,
-            tiledMarkerIds: &tiledMarkerIds,
+            tiledMarkerIds: &localTiledMarkerIds,
             shouldTile: { [shouldTileAll] _ in shouldTileAll }
         )
+        tiledMarkerIds = localTiledMarkerIds
+        MCLog.marker("MapLibreMarkerController.add ingest done tiledDataChanged=\(result.tiledDataChanged) hasTiledMarkers=\(result.hasTiledMarkers) tiledCount=\(tiledMarkerIds.count) style=\(mapView?.style != nil)")
 
         if result.tiledDataChanged, let tileRenderer {
             tileRenderer.invalidate()
             tileVersion += 1
             if let style = mapView?.style {
                 updateTileLayer(style: style, hasTiledMarkers: result.hasTiledMarkers)
+            } else {
+                MCLog.marker("MapLibreMarkerController.add skipped updateTileLayer: style not loaded")
             }
         }
     }
@@ -198,6 +215,7 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
         let layerId = tileLayerId ?? "mapconductor-tile-markers-layer-\(routeId)"
         tileSourceId = sourceId
         tileLayerId = layerId
+        MCLog.marker("MapLibreMarkerController.updateTileLayer hasTiledMarkers=\(hasTiledMarkers) version=\(tileVersion) urlTemplate=\(urlTemplate)")
 
         // Remove old layer/source
         if let existingLayer = style.layer(withIdentifier: layerId) {
@@ -214,6 +232,37 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
         let layer = MLNRasterStyleLayer(identifier: layerId, source: source)
         style.addSource(source)
         style.addLayer(layer)
+    }
+
+    /// Hit-test tiled markers at the given screen point (pts). Returns true if a clickable marker was found.
+    func handleTiledMarkerTap(at screenPoint: CGPoint) -> Bool {
+        MCLog.marker("MapLibreMarkerController.handleTiledMarkerTap point=\(screenPoint) tiledCount=\(tiledMarkerIds.count)")
+        guard !tiledMarkerIds.isEmpty, let mapView else { return false }
+        let clickRadiusPt: CGFloat = 44
+        var bestState: MarkerState? = nil
+        var bestDist = CGFloat.infinity
+
+        for id in tiledMarkerIds {
+            guard let entity = markerManager.getEntity(id), entity.state.clickable else { continue }
+            let coord = CLLocationCoordinate2D(
+                latitude: entity.state.position.latitude,
+                longitude: entity.state.position.longitude
+            )
+            let markerPoint = mapView.convert(coord, toPointTo: mapView)
+            let dist = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
+            if dist < clickRadiusPt && dist < bestDist {
+                bestDist = dist
+                bestState = entity.state
+            }
+        }
+
+        if let state = bestState {
+            MCLog.marker("MapLibreMarkerController.handleTiledMarkerTap hit id=\(state.id) dist=\(bestDist)")
+            dispatchClick(state: state)
+            return true
+        }
+        MCLog.marker("MapLibreMarkerController.handleTiledMarkerTap miss")
+        return false
     }
 
     func unbind() {
