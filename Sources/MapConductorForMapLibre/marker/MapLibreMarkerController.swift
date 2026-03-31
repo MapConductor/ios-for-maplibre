@@ -26,6 +26,7 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
     private var tiledMarkerIds: Set<String> = []
     private var tileSourceId: String?
     private var tileLayerId: String?
+    private var lastServerBaseUrl: String = ""
     private let defaultMarkerIconForTiling: BitmapIcon = DefaultMarkerIcon().toBitmapIcon()
 
     init(mapView: MLNMapView?, onUpdateInfoBubble: @escaping (String) -> Void) {
@@ -130,6 +131,8 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
                 MCLog.marker("MapLibreMarkerController.syncMarkers -> add()")
                 await self.add(data: self.latestStates)
             }
+        } else if isStyleLoaded {
+            refreshTileLayerIfNeeded()
         }
 
         for marker in markers {
@@ -207,9 +210,18 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
         }
     }
 
+    private func refreshTileLayerIfNeeded() {
+        guard !tiledMarkerIds.isEmpty, let style = mapView?.style else { return }
+        let server = TileServerRegistry.get()
+        guard server.baseUrl != lastServerBaseUrl else { return }
+        MCLog.marker("MapLibreMarkerController.refreshTileLayerIfNeeded serverRestarted oldUrl=\(lastServerBaseUrl) newUrl=\(server.baseUrl)")
+        updateTileLayer(style: style, hasTiledMarkers: true)
+    }
+
     private func updateTileLayer(style: MLNStyle, hasTiledMarkers: Bool) {
         guard let routeId = tileRouteId else { return }
         let server = TileServerRegistry.get()
+        lastServerBaseUrl = server.baseUrl
         let urlTemplate = server.urlTemplate(routeId: routeId, version: tileVersion)
         let sourceId = tileSourceId ?? "mapconductor-tile-markers-source-\(routeId)"
         let layerId = tileLayerId ?? "mapconductor-tile-markers-layer-\(routeId)"
