@@ -5,17 +5,6 @@ import MapLibre
 import SwiftUI
 import UIKit
 
-/// A container view that only intercepts touches on its subviews (InfoBubbles),
-/// allowing touches elsewhere to pass through to the map view below.
-private class PassthroughContainerView: UIView {
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        let hitView = super.hitTest(point, with: event)
-        // If the hit view is this container itself (not a subview), return nil
-        // to pass the touch through to the view below (the map).
-        return hitView == self ? nil : hitView
-    }
-}
-
 public struct MapLibreMapView: View {
     @ObservedObject private var state: MapLibreViewState
 
@@ -165,7 +154,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         private var circleController: MapLibreCircleController?
         private var polylineController: MapLibrePolylineController?
         private var polygonController: MapLibrePolygonController?
-        private var infoBubbleController: InfoBubbleController?
+        private var infoBubbleCoordinator: InfoBubbleOverlayCoordinator?
         private var strategyMarkerController: StrategyMarkerController<
             MLNPointFeature,
             AnyMarkerRenderingStrategy<MLNPointFeature>,
@@ -203,7 +192,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             state.setMapViewHolder(controller.holder)
 
             let markerController = MapLibreMarkerController(mapView: mapView) { [weak self] id in
-                self?.infoBubbleController?.updateInfoBubblePosition(for: id)
+                self?.infoBubbleCoordinator?.updateInfoBubblePosition(for: id)
             }
             self.markerController = markerController
 
@@ -230,12 +219,21 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                 markerController.onStyleLoaded(style)
             }
 
-            let infoBubbleController = InfoBubbleController(
-                mapView: mapView,
+            self.infoBubbleCoordinator = InfoBubbleOverlayCoordinator(
                 container: infoBubbleContainer,
-                markerController: markerController
+                project: { [weak self] point in
+                    guard let mapView = self?.mapView else { return nil }
+                    let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+                    return mapView.convert(coordinate, toPointTo: mapView)
+                },
+                resolveMarkerStateForIcon: { [weak markerController] id, bubbleMarker in
+                    markerController?.getMarkerState(for: id) ?? bubbleMarker
+                },
+                iconMetrics: { [weak markerController] markerState in
+                    let icon = markerController?.getIcon(for: markerState) ?? (markerState.icon ?? DefaultMarkerIcon()).toBitmapIcon()
+                    return MarkerIconMetrics(size: icon.size, anchor: icon.anchor, infoAnchor: icon.infoAnchor)
+                }
             )
-            self.infoBubbleController = infoBubbleController
         }
 
         func unbind() {
@@ -254,8 +252,8 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             polylineController = nil
             polygonController?.unbind()
             polygonController = nil
-            infoBubbleController?.unbind()
-            infoBubbleController = nil
+            infoBubbleCoordinator?.unbind()
+            infoBubbleCoordinator = nil
             strategyMarkerSubscriptions.values.forEach { $0.cancel() }
             strategyMarkerSubscriptions.removeAll()
             strategyMarkerStatesById.removeAll()
@@ -268,7 +266,8 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         }
 
         func updateContent(_ content: MapViewContent) {
-            infoBubbleController?.syncInfoBubbles(content.infoBubbles)
+            infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
+            markerController?.tilingOptions = content.markerTilingOptions
             markerController?.syncMarkers(content.markers)
             updateStrategyRendering(content)
             groundImageController?.syncGroundImages(content.groundImages)
@@ -276,7 +275,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             circleController?.syncCircles(content.circles)
             polylineController?.syncPolylines(content.polylines)
             polygonController?.syncPolygons(content.polygons)
-            infoBubbleController?.updateAllLayouts()
+            infoBubbleCoordinator?.updateAllLayouts()
         }
 
         // MARK: - MLNMapViewDelegate
@@ -310,6 +309,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
 
         func mapView(_ mapView: MLNMapView, regionWillChangeAnimated animated: Bool) {
             let camera = currentCameraPosition(from: mapView)
+            polylineController?.setCurrentCameraPosition(camera)
             controller?.notifyCameraMoveStart(camera)
             onCameraMoveStart?(camera)
             // Removed async Task calls to prevent crashes
@@ -323,6 +323,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         func mapViewRegionIsChanging(_ mapView: MLNMapView) {
             let camera = currentCameraPosition(from: mapView)
             state.updateCameraPosition(camera)
+            polylineController?.setCurrentCameraPosition(camera)
             controller?.notifyCameraMove(camera)
             onCameraMove?(camera)
             // Removed async Task calls to prevent crashes
@@ -336,6 +337,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         func mapView(_ mapView: MLNMapView, regionDidChangeAnimated animated: Bool) {
             let camera = currentCameraPosition(from: mapView)
             state.updateCameraPosition(camera)
+            polylineController?.setCurrentCameraPosition(camera)
             controller?.notifyCameraMoveEnd(camera)
             onCameraMoveEnd?(camera)
             // Removed async Task calls to prevent crashes
@@ -349,6 +351,9 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         @objc func handleMapTap(_ recognizer: UITapGestureRecognizer) {
             guard let mapView = mapView, recognizer.state == .ended else { return }
             let point = recognizer.location(in: mapView)
+
+            // Ensure polyline hit-testing uses the current zoom even if no region-change callbacks have fired yet.
+            polylineController?.setCurrentCameraPosition(currentCameraPosition(from: mapView))
 
             if markerController?.handleTap(at: point) == true {
                 updateInfoBubbleLayouts()
@@ -422,7 +427,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         }
 
         fileprivate func updateInfoBubbleLayouts() {
-            infoBubbleController?.updateAllLayouts()
+            infoBubbleCoordinator?.updateAllLayouts()
         }
 
         private func updateStrategyRendering(_ content: MapViewContent) {

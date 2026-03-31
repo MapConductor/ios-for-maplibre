@@ -10,10 +10,17 @@ func createMapLibrePolygons(
     fillColor: UIColor,
     strokeColor: UIColor,
     strokeWidth: Double,
-    zIndex: Int = 0
+    zIndex: Int = 0,
+    holes: [[GeoPointProtocol]] = []
 ) -> [MLNPolygonFeature] {
     let interpolated: [GeoPointProtocol] = (geodesic ? createInterpolatePoints(points, maxSegmentLength: 1000.0) : createLinearInterpolatePoints(points))
         .map { $0.normalize() }
+
+    let interiorPolygons: [MLNPolygon] = holes.compactMap { holePoints in
+        guard !holePoints.isEmpty else { return nil }
+        var coords = holePoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        return MLNPolygon(coordinates: &coords, count: UInt(coords.count))
+    }
 
     return splitByMeridian(interpolated, geodesic: geodesic).enumerated().map { index, ringPoints in
         let normalizedRing: [GeoPointProtocol]
@@ -26,7 +33,9 @@ func createMapLibrePolygons(
         }
         let coordinates = normalizedRing.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
         var coords = coordinates
-        let polygon = MLNPolygonFeature(coordinates: &coords, count: UInt(coords.count))
+        let polygon = interiorPolygons.isEmpty
+            ? MLNPolygonFeature(coordinates: &coords, count: UInt(coords.count))
+            : MLNPolygonFeature(coordinates: &coords, count: UInt(coords.count), interiorPolygons: interiorPolygons)
         let fid = "polygon-\(id)-\(index)"
         polygon.identifier = fid as NSString
         polygon.attributes = [

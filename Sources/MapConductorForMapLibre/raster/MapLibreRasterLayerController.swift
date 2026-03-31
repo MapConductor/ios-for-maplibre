@@ -2,6 +2,34 @@ import Combine
 import MapConductorCore
 import MapLibre
 
+private final class MapLibreRasterNetworkDelegate: NSObject, MLNNetworkConfigurationDelegate {
+    private let lock = NSLock()
+    private var userAgent: String?
+    private var extraHeaders: [String: String] = [:]
+
+    func update(userAgent: String?, extraHeaders: [String: String]) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.userAgent = userAgent
+        self.extraHeaders = extraHeaders
+    }
+
+    func willSend(_ request: NSMutableURLRequest) -> NSMutableURLRequest {
+        lock.lock()
+        let ua = userAgent
+        let headers = extraHeaders
+        lock.unlock()
+
+        if let ua, !ua.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
+            request.setValue(ua, forHTTPHeaderField: "User-Agent")
+        }
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        return request
+    }
+}
+
 @MainActor
 final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterLayer, MapLibreRasterLayerOverlayRenderer> {
     private weak var mapView: MLNMapView?
@@ -11,6 +39,7 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
     private var latestStates: [RasterLayerState] = []
     private var isStyleLoaded: Bool = false
     private var pendingUpdate: Task<Void, Never>?
+    private let networkDelegate = MapLibreRasterNetworkDelegate()
 
     init(mapView: MLNMapView?) {
         self.mapView = mapView
@@ -25,6 +54,7 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
 
         // Add initial layers if they were set before style loaded
         if !latestStates.isEmpty {
+            applyNetworkConfiguration(latestStates)
             syncLayersDirectly(latestStates)
         }
     }
@@ -82,7 +112,58 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
 
         // Perform synchronous update directly on main thread
         // Bypass async/await entirely to avoid object lifetime issues
-        syncLayersDirectly(layers.map { $0.state })
+        let states = layers.map { $0.state }
+        applyNetworkConfiguration(states)
+        syncLayersDirectly(states)
+    }
+
+    private func applyNetworkConfiguration(_ states: [RasterLayerState]) {
+        var requestedUserAgents = Set<String>()
+        var requestedHeadersList: [[String: String]] = []
+
+        for state in states {
+            if let ua = state.userAgent?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines), !ua.isEmpty {
+                requestedUserAgents.insert(ua)
+            }
+            if let headers = state.extraHeaders, !headers.isEmpty {
+                requestedHeadersList.append(headers)
+            }
+        }
+
+        let userAgent: String?
+        if requestedUserAgents.isEmpty {
+            userAgent = nil
+        } else if requestedUserAgents.count == 1 {
+            userAgent = requestedUserAgents.first
+        } else {
+            NSLog("[MapConductor] MapLibre RasterLayer: multiple different userAgent values are not supported; using an arbitrary one.")
+            userAgent = requestedUserAgents.first
+        }
+
+        var mergedHeaders: [String: String] = [:]
+        if !requestedHeadersList.isEmpty {
+            // MapLibre iOS only supports global request mutation; if multiple layers specify headers and they
+            // conflict, last-writer wins here.
+            var hadConflicts = false
+            for headers in requestedHeadersList {
+                for (k, v) in headers {
+                    if let existing = mergedHeaders[k], existing != v { hadConflicts = true }
+                    mergedHeaders[k] = v
+                }
+            }
+            if hadConflicts {
+                NSLog("[MapConductor] MapLibre RasterLayer: conflicting extraHeaders detected; MapLibre iOS applies headers globally, so some requests may use incorrect headers.")
+            }
+        }
+
+        if userAgent == nil && mergedHeaders.isEmpty {
+            // Restore default behavior.
+            MLNNetworkConfiguration.sharedManager.delegate = nil
+            return
+        }
+
+        networkDelegate.update(userAgent: userAgent, extraHeaders: mergedHeaders)
+        MLNNetworkConfiguration.sharedManager.delegate = networkDelegate
     }
 
     private func syncLayersDirectly(_ states: [RasterLayerState]) {
@@ -135,6 +216,7 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
                 guard let self else { return }
                 guard self.rasterStatesById[state.id] != nil else { return }
                 guard self.isStyleLoaded else { return }
+                self.applyNetworkConfiguration(self.latestStates)
                 self.syncLayersDirectly(self.latestStates)
             }
     }
@@ -147,6 +229,7 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
         rasterStatesById.removeAll()
         latestStates.removeAll()
         isStyleLoaded = false
+        MLNNetworkConfiguration.sharedManager.delegate = nil
         renderer.unbind()
         mapView = nil
         destroy()

@@ -37,7 +37,7 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
 
         removeSourceAndLayerIfExists(style: style, sourceId: sourceId, layerId: layerId)
 
-        let tileTemplate = tileServer.urlTemplate(routeId: routeId, version: 0)
+        let tileTemplate = buildTileTemplate(routeId: routeId, tileSize: state.tileSize, cacheKey: tileCacheKey(state))
         let tileSource = makeTileSource(id: sourceId, template: tileTemplate, tileSize: state.tileSize)
         let layer = MLNRasterStyleLayer(identifier: layerId, source: tileSource)
         layer.rasterOpacity = NSExpression(forConstantValue: min(max(state.opacity, 0.0), 1.0))
@@ -85,7 +85,7 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
         provider.update(state: current.state, opacity: 1.0)
 
         let nextVersion = groundImage.version + 1
-        let tileTemplate = tileServer.urlTemplate(routeId: groundImage.routeId, version: nextVersion)
+        let tileTemplate = buildTileTemplate(routeId: groundImage.routeId, tileSize: current.state.tileSize, cacheKey: tileCacheKey(current.state))
 
         removeSourceAndLayerIfExists(style: style, sourceId: groundImage.sourceId, layerId: groundImage.layerId)
 
@@ -139,6 +139,16 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
         return MLNRasterTileSource(identifier: id, tileURLTemplates: [template], options: options)
     }
 
+    private func buildTileTemplate(routeId: String, tileSize: Int, cacheKey: String) -> String {
+        tileServer.urlTemplate(routeId: routeId, tileSize: tileSize, cacheKey: cacheKey)
+    }
+
+    private func tileCacheKey(_ state: GroundImageState) -> String {
+        // Don't include opacity: MapLibre uses rasterOpacity so tiles don't need regeneration.
+        let finger = state.fingerPrint()
+        return "\(finger.bounds)-\(finger.image)-\(finger.tileSize)-\(finger.extra)"
+    }
+
     private func removeSourceAndLayerIfExists(style: MLNStyle, sourceId: String, layerId: String) {
         if let layer = style.layer(withIdentifier: layerId) {
             style.removeLayer(layer)
@@ -163,7 +173,6 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
             "mapconductor-polygons-line-",
             "mapconductor-circles-layer-",
             "mapconductor-cluster-layer-",
-            "mapconductor-raster-layer-",
             "mapconductor-markers-layer-"
         ]
         for prefix in prefixes {
