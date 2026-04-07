@@ -65,6 +65,7 @@ final class MapLibrePolylineOverlayRenderer: AbstractPolylineOverlayRenderer<[ML
     }
 
     override func onPostProcess() async {
+        guard !polylineManager.isDestroyed else { return }
         let features = polylineManager.allEntities().flatMap { $0.polyline ?? [] }
         polylineLayer.setFeatures(features)
     }

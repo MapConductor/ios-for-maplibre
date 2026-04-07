@@ -266,6 +266,9 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         }
 
         func updateContent(_ content: MapViewContent) {
+            if let mapView {
+                polylineController?.setCurrentCameraPosition(currentCameraPosition(from: mapView))
+            }
             infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
             markerController?.tilingOptions = content.markerTilingOptions
             markerController?.syncMarkers(content.markers)

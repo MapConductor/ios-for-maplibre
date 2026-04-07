@@ -64,15 +64,14 @@ final class MapLibreCircleOverlayRenderer: AbstractCircleOverlayRenderer<MLNPoin
         feature.coordinate = CLLocationCoordinate2D(latitude: state.center.latitude, longitude: state.center.longitude)
         feature.identifier = "circle-\(state.id)" as NSString
 
+        // Match the app-level camera zoom abstraction used across providers.
         let zoom = (mapView?.zoomLevel ?? 0.0) + mapLibreCameraZoomAdjustValue
         let metersPerPixel = calculateMetersPerPixel(latitude: state.center.latitude, zoom: zoom)
-        // MLNCircleStyleLayer.circleRadius is in points, not pixels.
-        // Our metersPerPixel is based on physical pixels, so convert to points to avoid 2x/3x inflation on Retina.
-        let scale = max(1.0, Double(mapView?.contentScaleFactor ?? UIScreen.main.scale))
-        let radiusPoints = metersPerPixel > 0 ? (state.radiusMeters / metersPerPixel) / scale : 0.0
+        // MapLibre's circleRadius matches the rendered pixel grid, so do not divide by UIScreen scale here.
+        let radiusPixels = metersPerPixel > 0 ? (state.radiusMeters / metersPerPixel) : 0.0
 
         feature.attributes = [
-            CircleLayer.Prop.radiusPixels: radiusPoints,
+            CircleLayer.Prop.radiusPixels: radiusPixels,
             CircleLayer.Prop.fillColor: state.fillColor,
             CircleLayer.Prop.strokeColor: state.strokeColor,
             CircleLayer.Prop.strokeWidth: state.strokeWidth,

@@ -86,8 +86,6 @@ final class MapLibreViewController: MapViewControllerProtocol {
         cameraAnimator?.start()
     }
 
-    func registerOverlayController(controller: any OverlayControllerProtocol) {}
-
     func notifyCameraMoveStart(_ cameraPosition: MapCameraPosition) {
         cameraMoveStartListener?(cameraPosition)
     }
