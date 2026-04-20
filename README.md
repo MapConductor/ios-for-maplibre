@@ -1,121 +1,222 @@
-# MapConductor MapLibre Native Module
+# MapLibre SDK for MapConductor iOS
 
-MapConductor MapLibre Native Module provides the MapLibre Native–specific
-implementation of the MapConductor unified API for iOS.
+## Description
 
-This module contains both the SwiftUI-based unified API bindings and
-the driver logic required to translate provider-agnostic map semantics
-into concrete behavior using the MapLibre Native SDK for iOS.
+MapConductor provides a unified API for iOS SwiftUI.
+You can use MapLibre with SwiftUI, but you can also switch to other Maps SDKs (such as Mapbox, MapKit, and so on), anytime.
+Even using the wrapper API, you can still access the native MapLibre view if you want.
 
----
+## Setup
 
-## Overview
+https://docs-ios.mapconductor.com/setup/maplibre/
 
-The MapLibre Native module is responsible for connecting the MapConductor
-conceptual API to the MapLibre Native SDK.
+## Usage
 
-While the unified API of MapConductor is conceptually shared across all
-map providers, its SwiftUI bindings and runtime behavior must be
-implemented in a provider-specific manner to account for differences in
-rendering, lifecycle management, and interaction models.
+```swift
+import SwiftUI
+import MapConductorCore
+import MapConductorForMapLibre
 
-This module fulfills that role for MapLibre Native.
+struct MapView: View {
+    @StateObject private var mapViewState = MapLibreViewState(
+        cameraPosition: MapCameraPosition(
+            position: GeoPoint(latitude: 35.6762, longitude: 139.6503),
+            zoom: 2
+        )
+    )
+    @State private var selectedMarker: MarkerState? = nil
 
-## Role in the architecture
+    let center = GeoPoint(latitude: 35.6762, longitude: 139.6503)
 
+    var body: some View {
+        MapLibreMapView(state: mapViewState) {
+            Marker(
+                position: center,
+                icon: DefaultMarkerIcon(label: "Tokyo"),
+                onClick: { state in selectedMarker = state }
+            )
+            if let selected = selectedMarker {
+                InfoBubble(marker: selected) {
+                    Text("Hello, world!")
+                }
+            }
+        }
+    }
+}
 ```
-┌────────────────────────────────────────────┐
-│ Application / App Logic                    │
-├────────────────────────────────────────────┤
-│ MapConductor Unified API (SwiftUI)         │
-│  (provider-specific implementation)        │
-│  - Unified API (SwiftUI bindings)          │
-│  - Internal controllers                    │
-├────────────────────────────────────────────┤
-│ MapConductor iOS Core                      │
-│  - Domain models                           │
-│  - State & behavior                        │
-│  - Provider-agnostic logic                 │
-├────────────────────────────────────────────┤
-│ MapLibre Native Module                     │
-│  - MapLibre Native Driver                  │
-│  - Internal renderers                      │
-├────────────────────────────────────────────┤
-│ MapLibre Native SDK for iOS                │
-└────────────────────────────────────────────┘
+
+![](docs/images/basic-setup-maplibre.png)
+
+
+## Components
+
+### MapLibreMapView [[docs]](https://docs-ios.mapconductor.com/components/mapviewcomponent/)
+
+```swift
+struct MapExample: View {
+    @StateObject private var mapViewState = MapLibreViewState(
+        cameraPosition: MapCameraPosition(
+            position: GeoPoint(latitude: 34.091, longitude: -117.886),
+            zoom: 9,
+            tilt: 60,
+            bearing: 30
+        )
+    )
+
+    var body: some View {
+        MapLibreMapView(state: mapViewState)
+    }
+}
 ```
+![](docs/images/mapview.png)
 
-In this architecture:
+------------------------------------------------------------------------
 
-- The **unified API** defines what a map operation means
+### Marker [[docs]](https://docs-ios.mapconductor.com/components/marker/)
 
-- The [core module](https://github.com/MapConductor/ios-sdk-core/tree/main) defines provider-agnostic semantics and state
+```swift
+struct MarkerExample: View {
+    @State private var markerState = MarkerState(
+        position: GeoPoint(latitude: 35.6762, longitude: 139.6503),
+        icon: DefaultMarkerIcon(label: "MapLibre"),
+        onClick: { state in state.animate(.bounce) }
+    )
 
-- This **MapLibre Native** module defines how those semantics are realized using the MapLibre Native SDK
+    var body: some View {
+        MapLibreMapView(state: mapViewState) {
+            Marker(state: markerState)
+        }
+    }
+}
+```
+![](docs/images/marker.png)
 
-## What this module does
+------------------------------------------------------------------------
 
-This module is responsible for:
+### InfoBubble [[docs]](https://docs-ios.mapconductor.com/components/infobubble/)
 
-- Providing the MapLibre Native–specific implementation of the MapConductor unified API (SwiftUI)
+```swift
+struct InfoBubbleExample: View {
+    @State private var selectedMarker: MarkerState? = nil
+    @State private var markerState = MarkerState(
+        position: GeoPoint(latitude: 35.6762, longitude: 139.6503),
+        onClick: { [self] state in selectedMarker = state }
+    )
 
-- Translating provider-agnostic domain models and state into MapLibre Native SDK operations
+    var body: some View {
+        MapLibreMapView(state: mapViewState) {
+            Marker(state: markerState)
+            if let selected = selectedMarker {
+                InfoBubble(marker: selected) {
+                    Text("Hello, world!")
+                }
+            }
+        }
+    }
+}
+```
+![](docs/images/infobubble.png)
 
-- Managing provider-specific controllers for camera, overlays, gestures, and interactions
+------------------------------------------------------------------------
 
-- Implementing MapLibre Native–specific rendering logic and workarounds where required
+### Circle [[docs]](https://docs-ios.mapconductor.com/components/circle/)
 
-In short, this module answers the question:
+```swift
+struct CircleExample: View {
+    var body: some View {
+        MapLibreMapView(state: mapViewState) {
+            Circle(
+                center: GeoPoint(latitude: 35.6762, longitude: 139.6503),
+                radiusMeters: 50,
+                fillColor: UIColor.blue.withAlphaComponent(0.5),
+                onClick: { state in
+                    state.fillColor = UIColor.red.withAlphaComponent(0.5)
+                }
+            )
+        }
+    }
+}
+```
+![](docs/images/circle.png)
 
-> “How should this unified map operation behave on MapLibre Native?”
+------------------------------------------------------------------------
 
-## What this module does NOT do
+### Polyline [[docs]](https://docs-ios.mapconductor.com/components/polyline/)
 
-Internally, this module typically consists of:
+```swift
+struct PolylineExample: View {
+    var body: some View {
+        MapLibreMapView(state: mapViewState) {
+            Polyline(
+                points: airports,
+                strokeColor: UIColor.blue.withAlphaComponent(0.5),
+                strokeWidth: 4,
+                geodesic: true
+            )
+        }
+    }
+}
+```
+![](docs/images/polyline.png)
 
-- **SwiftUI unified API bindings**
-  Provider-specific implementations of the unified API surface
+------------------------------------------------------------------------
 
-- **Controllers**
-  Components that manage state synchronization and event handling between SwiftUI, the core module, and the MapLibre Native SDK
+### Polygon [[docs]](https://docs-ios.mapconductor.com/components/polygon/)
 
-- **Renderers**
-  Low-level components that create and update MapLibre Native SDK objects such as markers, overlays, and camera updates
+```swift
+struct PolygonExample: View {
+    var body: some View {
+        MapLibreMapView(state: mapViewState) {
+            Polygon(
+                points: goryokaku,
+                strokeColor: UIColor.blue.withAlphaComponent(0.5),
+                fillColor: UIColor.red.withAlphaComponent(0.7)
+            )
+        }
+    }
+}
+```
+![](docs/images/polygon.png)
 
-These components are considered implementation details and are not part of the public API.
+------------------------------------------------------------------------
 
-## Design philosophy
+### Polygon Hole
 
-This module follows these design principles:
+```swift
+struct PolygonHoleExample: View {
+    var body: some View {
+        MapLibreMapView(state: mapViewState) {
+            Polygon(
+                points: outerPoints,
+                holes: [innerPoints1, innerPoints2],
+                fillColor: UIColor(red: 0.47, green: 0.47, blue: 0.50, alpha: 0.8),
+                strokeColor: UIColor.red,
+                strokeWidth: 2
+            )
+        }
+    }
+}
+```
+![](docs/images/polygon-hole.png)
 
-- **Conceptually unified, operationally specialized**
-  The meaning of map operations is shared across providers, while implementation details remain provider-specific.
+------------------------------------------------------------------------
 
-- **Isolation of provider-specific behavior**
-  MapLibre Native quirks and limitations should not leak into the core module or unified API definitions.
+### GroundImage [[docs]](https://docs-ios.mapconductor.com/components/groundimage/)
 
-- **No lowest common denominator APIs**
-  Differences in provider capabilities are handled through adaptation, not by reducing the expressive power of the unified API.
-  
-## Who should use or modify this module
-
-This module is primarily intended for:
-
-- Contributors implementing or maintaining MapLibre Native support
-
-- Developers debugging provider-specific map behavior
-
-- Contributors extending MapConductor with new MapLibre Native features
-
-If you are using MapConductor via the unified API in an application,
-you typically do not need to interact with this module directly.
-
-## Relationship to other modules
-
-- **MapConductor iOS Core**
-  https://github.com/MapConductor/ios-sdk-core/tree/main
-  Defines provider-agnostic domain models, state, and semantics
-
-- **Other provider modules**
-  (e.g. MapKit, MapLibre) implement the same semantic contract for different map SDKs
-
+```swift
+struct GroundImageExample: View {
+    var body: some View {
+        MapLibreMapView(state: mapViewState) {
+            GroundImage(
+                bounds: GeoRectBounds(
+                    southWest: GeoPoint.fromLatLong(...),
+                    northEast: GeoPoint.fromLatLong(...)
+                ),
+                image: uiImage,
+                opacity: 0.5
+            )
+        }
+    }
+}
+```
+![](docs/images/groundimage.png)
