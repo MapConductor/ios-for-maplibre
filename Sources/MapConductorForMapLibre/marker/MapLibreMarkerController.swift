@@ -93,8 +93,8 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
         eventController?.handleTap(at: point) ?? false
     }
 
-    func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
-        eventController?.handleLongPress(recognizer)
+    func handleLongPress(_ recognizer: UILongPressGestureRecognizer) -> Bool {
+        eventController?.handleLongPress(recognizer) ?? false
     }
 
     func syncMarkers(_ markers: [Marker]) {

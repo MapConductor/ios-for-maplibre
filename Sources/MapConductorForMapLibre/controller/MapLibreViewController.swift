@@ -101,6 +101,10 @@ final class MapLibreViewController: MapViewControllerProtocol {
     func notifyMapClick(_ point: GeoPoint) {
         mapClickListener?(point)
     }
+
+    func notifyMapLongClick(_ point: GeoPoint) {
+        mapLongClickListener?(point)
+    }
 }
 
 private final class CameraAnimator {
