@@ -18,7 +18,7 @@ func createMapLibrePolygons(
 
     let interiorPolygons: [MLNPolygon] = holes.compactMap { holePoints in
         guard !holePoints.isEmpty else { return nil }
-        var coords = holePoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        var coords = ensureClockwiseRing(holePoints).map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
         return MLNPolygon(coordinates: &coords, count: UInt(coords.count))
     }
 
