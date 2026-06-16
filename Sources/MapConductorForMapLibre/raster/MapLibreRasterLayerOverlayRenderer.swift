@@ -51,8 +51,11 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
         layer.isVisible = state.visible
 
         style.addSource(source)
-        // Add the overlay at the top so it is visible even for raster-only base styles.
-        style.addLayer(layer)
+        if state.debug {
+            NSLog("[MapConductor] RasterLayer debug mode: id=%@", state.id)
+        }
+        let insertIndex = UInt(min(state.zIndex, style.layers.count))
+        style.insertLayer(layer, at: insertIndex)
 
         return MapLibreRasterLayer(source: source, layer: layer)
     }
@@ -76,6 +79,16 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
                 style.removeSource(layer.source)
             }
             return createLayerSync(state: current.state)
+        }
+
+        if finger.debug != prevFinger.debug && current.state.debug {
+            NSLog("[MapConductor] RasterLayer debug mode: id=%@", current.state.id)
+        }
+
+        if finger.zIndex != prevFinger.zIndex {
+            style.removeLayer(layer.layer)
+            let insertIndex = UInt(min(current.state.zIndex, style.layers.count))
+            style.insertLayer(layer.layer, at: insertIndex)
         }
 
         if finger.opacity != prevFinger.opacity {
