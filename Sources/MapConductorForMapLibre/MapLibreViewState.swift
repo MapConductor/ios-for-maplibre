@@ -7,6 +7,7 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
 
     @Published private var _cameraPosition: MapCameraPosition
     @Published private var _mapDesignType: MapLibreMapDesignType
+    @Published private var _uiSettings: MapUISettings
 
     private var controller: (any MapViewControllerProtocol)?
     private var mapViewHolder: AnyMapViewHolder?
@@ -20,22 +21,30 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
         set { _mapDesignType = newValue }
     }
 
+    public override var uiSettings: MapUISettings {
+        get { _uiSettings }
+        set { _uiSettings = newValue }
+    }
+
     public init(
         id: String,
         mapDesignType: MapLibreMapDesignType = MapLibreDesign.DemoTiles,
-        cameraPosition: MapCameraPosition = .Default
+        cameraPosition: MapCameraPosition = .Default,
+        uiSettings: MapUISettings = MapUISettings()
     ) {
         self.stateId = id
         self._mapDesignType = mapDesignType
         self._cameraPosition = cameraPosition
+        self._uiSettings = uiSettings
         super.init()
     }
 
     public convenience init(
         mapDesignType: MapLibreMapDesignType = MapLibreDesign.OsmBright,
-        cameraPosition: MapCameraPosition = .Default
+        cameraPosition: MapCameraPosition = .Default,
+        uiSettings: MapUISettings = MapUISettings()
     ) {
-        self.init(id: UUID().uuidString, mapDesignType: mapDesignType, cameraPosition: cameraPosition)
+        self.init(id: UUID().uuidString, mapDesignType: mapDesignType, cameraPosition: cameraPosition, uiSettings: uiSettings)
     }
 
     public override func moveCameraTo(cameraPosition: MapCameraPosition, durationMillis: Long? = 0) {
@@ -49,6 +58,10 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
         } else {
             _cameraPosition = resolved
         }
+    }
+
+    public override func fitBounds(bounds: GeoRectBounds, padding: Int) {
+        controller?.fitBounds(bounds: bounds, padding: padding)
     }
 
     public override func moveCameraTo(position: GeoPoint, durationMillis: Long? = 0) {

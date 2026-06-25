@@ -90,6 +90,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         }
         mapView.prefetchesTiles = false
         mapView.tileCacheEnabled = false
+        mapView.isScrollEnabled = state.uiSettings.scrollGesture
         mapView.delegate = context.coordinator
         mapView.setCenter(
             CLLocationCoordinate2D(
@@ -133,6 +134,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
            uiView.styleURL != styleURL {
             uiView.styleURL = styleURL
         }
+        uiView.isScrollEnabled = state.uiSettings.scrollGesture
         MCLog.map("MapLibreMapView.updateUIView updateContent markers=\(content.markers.count) bubbles=\(content.infoBubbles.count)")
         context.coordinator.updateContent(content)
         context.coordinator.updateInfoBubbleLayouts()

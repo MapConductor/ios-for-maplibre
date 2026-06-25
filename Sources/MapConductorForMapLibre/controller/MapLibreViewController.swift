@@ -2,6 +2,7 @@ import CoreLocation
 import MapLibre
 import MapConductorCore
 import QuartzCore
+import UIKit
 
 final class MapLibreViewController: MapViewControllerProtocol {
     let holder: AnyMapViewHolder
@@ -89,6 +90,18 @@ final class MapLibreViewController: MapViewControllerProtocol {
             duration: durationSeconds
         )
         cameraAnimator?.start()
+    }
+
+    func fitBounds(bounds: GeoRectBounds, padding: Int) {
+        guard let mapView = mapView,
+              let sw = bounds.southWest,
+              let ne = bounds.northEast else { return }
+        let coordinateBounds = MLNCoordinateBoundsMake(
+            CLLocationCoordinate2D(latitude: sw.latitude, longitude: sw.longitude),
+            CLLocationCoordinate2D(latitude: ne.latitude, longitude: ne.longitude)
+        )
+        let edgePadding = UIEdgeInsets(top: CGFloat(padding), left: CGFloat(padding), bottom: CGFloat(padding), right: CGFloat(padding))
+        mapView.setVisibleCoordinateBounds(coordinateBounds, edgePadding: edgePadding, animated: false)
     }
 
     func notifyCameraMoveStart(_ cameraPosition: MapCameraPosition) {
