@@ -54,10 +54,24 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
         if state.debug {
             NSLog("[MapConductor] RasterLayer debug mode: id=%@", state.id)
         }
-        let insertIndex = UInt(min(state.zIndex, style.layers.count))
-        style.insertLayer(layer, at: insertIndex)
+        insertLayer(layer, zIndex: state.zIndex, style: style)
 
         return MapLibreRasterLayer(source: source, layer: layer)
+    }
+
+    /// zIndex orders MapConductor raster layers among themselves; the basemap
+    /// style's own layers always stay below. Mapping zIndex to a raw style
+    /// index put zIndex=0 layers at the bottom of the style stack — beneath
+    /// the basemap — so they rendered but were never visible.
+    private func insertLayer(_ layer: MLNRasterStyleLayer, zIndex: Int, style: MLNStyle) {
+        let conductorIndices = style.layers.indices.filter {
+            style.layers[$0].identifier.hasPrefix("mapconductor-raster-layer-")
+        }
+        if zIndex >= 0, zIndex < conductorIndices.count {
+            style.insertLayer(layer, at: UInt(conductorIndices[zIndex]))
+        } else {
+            style.addLayer(layer)
+        }
     }
 
     func updateLayerSync(
@@ -87,8 +101,7 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
 
         if finger.zIndex != prevFinger.zIndex {
             style.removeLayer(layer.layer)
-            let insertIndex = UInt(min(current.state.zIndex, style.layers.count))
-            style.insertLayer(layer.layer, at: insertIndex)
+            insertLayer(layer.layer, zIndex: current.state.zIndex, style: style)
         }
 
         if finger.opacity != prevFinger.opacity {

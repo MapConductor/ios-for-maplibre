@@ -35,6 +35,11 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
     private var postProcessPending: Bool = false
     private var postProcessTask: Task<Void, Never>?
 
+    /// When set, drop/bounce animations run on the screen-space overlay layer
+    /// (projection-independent: correct on tilted/rotated views) and the
+    /// native marker stays hidden for the duration.
+    var animationOverlay: MarkerAnimationOverlayCoordinator?
+
     var animateStartListener: OnMarkerEventHandler?
     var animateEndListener: OnMarkerEventHandler?
 
@@ -197,6 +202,36 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
         duration: CFTimeInterval
     ) async {
         guard let mapView, let marker = entity.marker else { return }
+
+        // Preferred path: animate the marker image on the screen-space overlay.
+        // Projection-independent, so tilt/rotation/globe views stay correct.
+        // The native feature was added with isHidden=1 (pending animation);
+        // reveal it at the target when the overlay finishes.
+        if let overlay = animationOverlay {
+            animateStartListener?(entity.state)
+            let icon = (entity.state.icon ?? DefaultMarkerIcon()).toBitmapIcon()
+            let target = CLLocationCoordinate2D(
+                latitude: entity.state.position.latitude,
+                longitude: entity.state.position.longitude
+            )
+            overlay.start(MarkerAnimationOverlayEntry(
+                id: entity.state.id,
+                state: entity.state,
+                icon: icon,
+                animation: animation,
+                duration: duration,
+                onFinished: { [weak self] in
+                    var attributes = marker.attributes
+                    attributes[Prop.isHidden] = NSNumber(value: 0)
+                    marker.attributes = attributes
+                    marker.coordinate = target
+                    entity.state.animate(nil)
+                    self?.animateEndListener?(entity.state)
+                    Task { await self?.onPostProcess() }
+                }
+            ))
+            return
+        }
 
         MCLog.marker("MapLibreMarkerRenderer.onAnimate start id=\(entity.state.id) anim=\(animation) bounds=\(String(describing: mapView.bounds))")
         mapView.layoutIfNeeded()

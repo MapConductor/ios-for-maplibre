@@ -245,9 +245,23 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                     return MarkerIconMetrics(size: icon.size, anchor: icon.anchor, infoAnchor: icon.infoAnchor)
                 }
             )
+
+            // Screen-space marker animation layer: shares the info-bubble
+            // container (inserted below the bubbles) and the map projection.
+            markerController.renderer.animationOverlay = MarkerAnimationOverlayCoordinator(
+                container: infoBubbleContainer,
+                project: { [weak self] point in
+                    guard let mapView = self?.mapView else { return nil }
+                    let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+                    let p = mapView.convert(coordinate, toPointTo: mapView)
+                    return (p.x.isFinite && p.y.isFinite) ? p : nil
+                }
+            )
         }
 
         func unbind() {
+            markerController?.renderer.animationOverlay?.unbind()
+            markerController?.renderer.animationOverlay = nil
             state.setController(nil)
             state.setMapViewHolder(nil)
             controller = nil
