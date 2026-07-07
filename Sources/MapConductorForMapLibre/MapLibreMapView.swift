@@ -92,17 +92,15 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         mapView.tileCacheEnabled = false
         mapView.isScrollEnabled = state.uiSettings.scrollGesture
         mapView.delegate = context.coordinator
+        let initialCameraState = state.cameraPosition.toMapLibreCameraState()
         mapView.setCenter(
-            CLLocationCoordinate2D(
-                latitude: state.cameraPosition.position.latitude,
-                longitude: state.cameraPosition.position.longitude
-            ),
-            zoomLevel: state.cameraPosition.adjustedZoomForMapLibre(),
-            direction: state.cameraPosition.bearing,
+            initialCameraState.center,
+            zoomLevel: initialCameraState.zoom,
+            direction: initialCameraState.bearing,
             animated: false
         )
         let initialCamera = mapView.camera
-        initialCamera.pitch = state.cameraPosition.tilt
+        initialCamera.pitch = initialCameraState.tilt
         mapView.setCamera(initialCamera, animated: false)
 
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapTap(_:)))
@@ -247,9 +245,23 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                     return MarkerIconMetrics(size: icon.size, anchor: icon.anchor, infoAnchor: icon.infoAnchor)
                 }
             )
+
+            // Screen-space marker animation layer: shares the info-bubble
+            // container (inserted below the bubbles) and the map projection.
+            markerController.renderer.animationOverlay = MarkerAnimationOverlayCoordinator(
+                container: infoBubbleContainer,
+                project: { [weak self] point in
+                    guard let mapView = self?.mapView else { return nil }
+                    let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+                    let p = mapView.convert(coordinate, toPointTo: mapView)
+                    return (p.x.isFinite && p.y.isFinite) ? p : nil
+                }
+            )
         }
 
         func unbind() {
+            markerController?.renderer.animationOverlay?.unbind()
+            markerController?.renderer.animationOverlay = nil
             state.setController(nil)
             state.setMapViewHolder(nil)
             controller = nil
@@ -425,7 +437,10 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                 farLeft: geoPoint(at: CGPoint(x: 0, y: 0), mapView: mapView),
                 farRight: geoPoint(at: CGPoint(x: mapView.bounds.maxX, y: 0), mapView: mapView)
             )
-            return mapView.toMapCameraPosition(visibleRegion: visibleRegion)
+            return mapView.toMapCameraPosition(
+                logicalTiltHint: controller?.lastLogicalTilt,
+                visibleRegion: visibleRegion
+            )
         }
 
         fileprivate func attachInfoBubbleContainer(to mapView: MLNMapView) {

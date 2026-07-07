@@ -9,6 +9,7 @@ final class MapLibreViewController: MapViewControllerProtocol {
     let coroutine = CoroutineScope()
     private weak var mapView: MLNMapView?
     private var cameraAnimator: CameraAnimator?
+    private(set) var lastLogicalTilt: Double? = nil
 
     private var cameraMoveStartListener: OnCameraMoveHandler?
     private var cameraMoveListener: OnCameraMoveHandler?
@@ -55,21 +56,20 @@ final class MapLibreViewController: MapViewControllerProtocol {
 
     func moveCamera(position: MapCameraPosition) {
         guard let mapView = mapView else { return }
+        lastLogicalTilt = position.tilt
+        let cameraState = position.toMapLibreCameraState()
 
         // Set zoom/center/bearing first, then apply pitch via setCamera.
         // Note: MLNMapView.camera is a copy; mutating mapView.camera.pitch does not affect the map.
         mapView.setCenter(
-            CLLocationCoordinate2D(
-                latitude: position.position.latitude,
-                longitude: position.position.longitude
-            ),
-            zoomLevel: position.adjustedZoomForMapLibre(),
-            direction: position.bearing,
+            cameraState.center,
+            zoomLevel: cameraState.zoom,
+            direction: cameraState.bearing,
             animated: false
         )
 
         let camera = mapView.camera
-        camera.pitch = position.tilt
+        camera.pitch = cameraState.tilt
         mapView.setCamera(camera, animated: false)
     }
 
@@ -82,7 +82,8 @@ final class MapLibreViewController: MapViewControllerProtocol {
         }
 
         cameraAnimator?.stop()
-        let from = mapView.toMapCameraPosition()
+        let from = mapView.toMapCameraPosition(logicalTiltHint: lastLogicalTilt)
+        lastLogicalTilt = position.tilt
         cameraAnimator = CameraAnimator(
             mapView: mapView,
             from: from,
@@ -180,21 +181,22 @@ private final class CameraAnimator {
         let bearing = lerpAngle(from.bearing, to.bearing, t)
         let tilt = lerp(from.tilt, to.tilt, t)
 
-        let center = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
         let currentPos = MapCameraPosition(
             position: GeoPoint(latitude: latitude, longitude: longitude, altitude: 0),
             zoom: zoom,
             bearing: bearing,
             tilt: tilt
         )
+        let cameraState = currentPos.toMapLibreCameraState()
         mapView.setCenter(
-            center,
-            zoomLevel: currentPos.adjustedZoomForMapLibre(),
+            cameraState.center,
+            zoomLevel: cameraState.zoom,
+            direction: cameraState.bearing,
             animated: false
         )
         let camera = mapView.camera
-        camera.heading = bearing
-        camera.pitch = tilt
+        camera.heading = cameraState.bearing
+        camera.pitch = cameraState.tilt
         mapView.setCamera(camera, animated: false)
 
         if t >= 1.0 {

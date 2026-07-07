@@ -65,7 +65,7 @@ final class MapLibreCircleOverlayRenderer: AbstractCircleOverlayRenderer<MLNPoin
         feature.identifier = "circle-\(state.id)" as NSString
 
         // Match the app-level camera zoom abstraction used across providers.
-        let zoom = (mapView?.zoomLevel ?? 0.0) + mapLibreCameraZoomAdjustValue
+        let zoom = MapLibreZoomAltitudeConverter.maplibreZoomToGoogleZoom(mapView?.zoomLevel ?? 0.0)
         let metersPerPixel = calculateMetersPerPixel(latitude: state.center.latitude, zoom: zoom)
         // MapLibre's circleRadius matches the rendered pixel grid, so do not divide by UIScreen scale here.
         let radiusPixels = metersPerPixel > 0 ? (state.radiusMeters / metersPerPixel) : 0.0
