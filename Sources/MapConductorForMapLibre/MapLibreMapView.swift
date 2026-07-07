@@ -161,6 +161,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         private var circleController: MapLibreCircleController?
         private var polylineController: MapLibrePolylineController?
         private var polygonController: MapLibrePolygonController?
+        private var hullPolygonController: MapLibrePolygonController?
         private var infoBubbleCoordinator: InfoBubbleOverlayCoordinator?
         private lazy var strategyManager = StrategyMarkerManager<MLNPointFeature, MapLibreMarkerRenderer>(
             makeRenderer: { [weak self] strategy in
@@ -221,10 +222,12 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
 
             let polygonController = MapLibrePolygonController(mapView: mapView)
             self.polygonController = polygonController
+            self.hullPolygonController = MapLibrePolygonController(mapView: mapView)
             if let style = mapView.style {
                 groundImageController.onStyleLoaded(style)
                 rasterController.onStyleLoaded(style)
                 polygonController.onStyleLoaded(style)
+                hullPolygonController?.onStyleLoaded(style)
                 polylineController.onStyleLoaded(style)
                 circleController.onStyleLoaded(style)
                 markerController.onStyleLoaded(style)
@@ -277,6 +280,8 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             polylineController = nil
             polygonController?.unbind()
             polygonController = nil
+            hullPolygonController?.unbind()
+            hullPolygonController = nil
             infoBubbleCoordinator?.unbind()
             infoBubbleCoordinator = nil
             strategyManager.clear()
@@ -298,6 +303,12 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             circleController?.syncCircles(content.circles)
             polylineController?.syncPolylines(content.polylines)
             polygonController?.syncPolygons(content.polygons)
+            for handler in content.polygonSyncHandlers {
+                let hullController = hullPolygonController
+                handler.bindPolygonSync { [weak hullController] states in
+                    await hullController?.add(data: states)
+                }
+            }
             infoBubbleCoordinator?.updateAllLayouts()
         }
 
@@ -309,6 +320,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                 groundImageController?.onStyleLoaded(style)
                 rasterController?.onStyleLoaded(style)
                 polygonController?.onStyleLoaded(style)
+                hullPolygonController?.onStyleLoaded(style)
                 polylineController?.onStyleLoaded(style)
                 circleController?.onStyleLoaded(style)
                 markerController?.onStyleLoaded(style)

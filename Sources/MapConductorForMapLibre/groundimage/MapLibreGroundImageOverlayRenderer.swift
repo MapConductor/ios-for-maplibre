@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import MapConductorCore
 import MapLibre
@@ -7,11 +8,8 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
     private weak var mapView: MLNMapView?
     private var style: MLNStyle?
 
-    private let tileServer: LocalTileServer
-
     init(mapView: MLNMapView?) {
         self.mapView = mapView
-        self.tileServer = TileServerRegistry.get()
         super.init()
     }
 
@@ -25,35 +23,27 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
     }
 
     func createGroundImageSync(state: GroundImageState) -> MapLibreGroundImageHandle? {
-        guard let style else { return nil }
+        guard let style, let coordinates = state.bounds.toCoordinateQuad() else { return nil }
 
-        let routeId = buildSafeRouteId(state.id)
-        let provider = GroundImageTileProvider(tileSize: state.tileSize)
-        provider.update(state: state, opacity: 1.0)
-        tileServer.register(routeId: routeId, provider: provider)
-
-        let sourceId = "mapconductor-groundimage-source-\(routeId)"
-        let layerId = "mapconductor-groundimage-layer-\(routeId)"
+        let sourceId = sourceId(for: state.id)
+        let layerId = layerId(for: state.id)
 
         removeSourceAndLayerIfExists(style: style, sourceId: sourceId, layerId: layerId)
 
-        let tileTemplate = buildTileTemplate(routeId: routeId, tileSize: state.tileSize, cacheKey: tileCacheKey(state))
-        let tileSource = makeTileSource(id: sourceId, template: tileTemplate, tileSize: state.tileSize)
-        let layer = MLNRasterStyleLayer(identifier: layerId, source: tileSource)
-        layer.rasterOpacity = NSExpression(forConstantValue: min(max(state.opacity, 0.0), 1.0))
+        let imageSource = MLNImageSource(identifier: sourceId, coordinateQuad: coordinates, image: state.image)
+        let layer = MLNRasterStyleLayer(identifier: layerId, source: imageSource)
+        layer.rasterOpacity = NSExpression(forConstantValue: state.opacity.clampedOpacity)
         layer.isVisible = true
 
-        style.addSource(tileSource)
+        style.addSource(imageSource)
         insertLayer(layer, into: style)
 
         return MapLibreGroundImageHandle(
-            routeId: routeId,
-            version: 0,
             sourceId: sourceId,
             layerId: layerId,
-            tileProvider: provider,
-            tileSource: tileSource,
-            rasterLayer: layer
+            imageSource: imageSource,
+            rasterLayer: layer,
+            applied: state.fingerPrint().toAppliedGroundImage()
         )
     }
 
@@ -62,56 +52,39 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
         current: GroundImageEntity<MapLibreGroundImageHandle>,
         prev: GroundImageEntity<MapLibreGroundImageHandle>
     ) -> MapLibreGroundImageHandle? {
-        let finger = current.fingerPrint
-        let prevFinger = prev.fingerPrint
-
         guard let style else { return groundImage }
 
+        guard let imageSource = style.source(withIdentifier: groundImage.sourceId) as? MLNImageSource,
+              let layer = style.layer(withIdentifier: groundImage.layerId) as? MLNRasterStyleLayer else {
+            removeSourceAndLayerIfExists(style: style, sourceId: groundImage.sourceId, layerId: groundImage.layerId)
+            return createGroundImageSync(state: current.state)
+        }
+
+        let finger = current.fingerPrint
+        let prevFinger = groundImage.applied
+        guard let coordinates = current.state.bounds.toCoordinateQuad() else { return groundImage }
+
+        if finger.image != prevFinger.image {
+            imageSource.image = current.state.image
+            imageSource.coordinates = coordinates
+        } else if finger.bounds != prevFinger.bounds {
+            imageSource.coordinates = coordinates
+        }
+
         if finger.opacity != prevFinger.opacity {
-            groundImage.rasterLayer.rasterOpacity = NSExpression(forConstantValue: min(max(current.state.opacity, 0.0), 1.0))
+            layer.rasterOpacity = NSExpression(forConstantValue: current.state.opacity.clampedOpacity)
         }
 
-        let tileSizeChanged = finger.tileSize != prevFinger.tileSize
-        let tileContentChanged = tileSizeChanged || finger.bounds != prevFinger.bounds || finger.image != prevFinger.image
-        guard tileContentChanged else { return groundImage }
-
-        let provider: GroundImageTileProvider
-        if tileSizeChanged {
-            provider = GroundImageTileProvider(tileSize: current.state.tileSize)
-            tileServer.register(routeId: groundImage.routeId, provider: provider)
-        } else {
-            provider = groundImage.tileProvider
-        }
-        provider.update(state: current.state, opacity: 1.0)
-
-        let nextVersion = groundImage.version + 1
-        let tileTemplate = buildTileTemplate(routeId: groundImage.routeId, tileSize: current.state.tileSize, cacheKey: tileCacheKey(current.state))
-
-        removeSourceAndLayerIfExists(style: style, sourceId: groundImage.sourceId, layerId: groundImage.layerId)
-
-        let tileSource = makeTileSource(id: groundImage.sourceId, template: tileTemplate, tileSize: current.state.tileSize)
-        let layer = MLNRasterStyleLayer(identifier: groundImage.layerId, source: tileSource)
-        layer.rasterOpacity = NSExpression(forConstantValue: min(max(current.state.opacity, 0.0), 1.0))
-        layer.isVisible = true
-
-        style.addSource(tileSource)
-        insertLayer(layer, into: style)
-
-        return MapLibreGroundImageHandle(
-            routeId: groundImage.routeId,
-            version: nextVersion,
-            sourceId: groundImage.sourceId,
-            layerId: groundImage.layerId,
-            tileProvider: provider,
-            tileSource: tileSource,
-            rasterLayer: layer
+        return groundImage.copy(
+            imageSource: imageSource,
+            rasterLayer: layer,
+            applied: finger.toAppliedGroundImage()
         )
     }
 
     func removeGroundImageSync(entity: GroundImageEntity<MapLibreGroundImageHandle>) {
         guard let style, let handle = entity.groundImage else { return }
         removeSourceAndLayerIfExists(style: style, sourceId: handle.sourceId, layerId: handle.layerId)
-        tileServer.unregister(routeId: handle.routeId)
     }
 
     override func createGroundImage(state: GroundImageState) async -> MapLibreGroundImageHandle? {
@@ -128,25 +101,6 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
 
     override func removeGroundImage(entity: GroundImageEntity<MapLibreGroundImageHandle>) async {
         removeGroundImageSync(entity: entity)
-    }
-
-    private func makeTileSource(id: String, template: String, tileSize: Int) -> MLNRasterTileSource {
-        let options: [MLNTileSourceOption: Any] = [
-            .tileSize: NSNumber(value: tileSize),
-            .minimumZoomLevel: NSNumber(value: 0),
-            .maximumZoomLevel: NSNumber(value: 22)
-        ]
-        return MLNRasterTileSource(identifier: id, tileURLTemplates: [template], options: options)
-    }
-
-    private func buildTileTemplate(routeId: String, tileSize: Int, cacheKey: String) -> String {
-        tileServer.urlTemplate(routeId: routeId, tileSize: tileSize, cacheKey: cacheKey)
-    }
-
-    private func tileCacheKey(_ state: GroundImageState) -> String {
-        // Don't include opacity: MapLibre uses rasterOpacity so tiles don't need regeneration.
-        let finger = state.fingerPrint()
-        return "\(finger.bounds)-\(finger.image)-\(finger.tileSize)-\(finger.extra)"
     }
 
     private func removeSourceAndLayerIfExists(style: MLNStyle, sourceId: String, layerId: String) {
@@ -183,16 +137,48 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
         return nil
     }
 
-    private func buildSafeRouteId(_ id: String) -> String {
-        var out = "groundimage-"
-        out.reserveCapacity(out.count + id.count)
-        for ch in id {
+    private func sourceId(for id: String) -> String {
+        "mc-gimg-src-\(styleIdPart(id))"
+    }
+
+    private func layerId(for id: String) -> String {
+        "mc-gimg-lyr-\(styleIdPart(id))"
+    }
+
+    private func styleIdPart(_ id: String) -> String {
+        String(id.map { ch in
             if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" {
-                out.append(ch)
-            } else {
-                out.append("_")
+                return ch
             }
-        }
-        return out
+            return "_"
+        })
+    }
+}
+
+private extension GeoRectBounds {
+    func toCoordinateQuad() -> MLNCoordinateQuad? {
+        guard let sw = southWest, let ne = northEast else { return nil }
+        return MLNCoordinateQuadMake(
+            CLLocationCoordinate2D(latitude: ne.latitude, longitude: sw.longitude),
+            CLLocationCoordinate2D(latitude: sw.latitude, longitude: sw.longitude),
+            CLLocationCoordinate2D(latitude: sw.latitude, longitude: ne.longitude),
+            CLLocationCoordinate2D(latitude: ne.latitude, longitude: ne.longitude)
+        )
+    }
+}
+
+private extension GroundImageFingerPrint {
+    func toAppliedGroundImage() -> AppliedGroundImage {
+        AppliedGroundImage(
+            bounds: bounds,
+            image: image,
+            opacity: opacity
+        )
+    }
+}
+
+private extension Double {
+    var clampedOpacity: Double {
+        min(max(self, 0.0), 1.0)
     }
 }

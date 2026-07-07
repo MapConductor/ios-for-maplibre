@@ -103,36 +103,27 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
         let oldIds = Set(markerStatesById.keys)
 
         var newStatesById: [String: MarkerState] = [:]
-        var shouldSyncList = false
         for marker in markers {
             let state = marker.state
             if let existingState = markerStatesById[state.id], existingState !== state {
                 markerSubscriptions[state.id]?.cancel()
                 markerSubscriptions.removeValue(forKey: state.id)
-                // State instance changed: ensure controller updates entity reference.
-                shouldSyncList = true
             }
             newStatesById[state.id] = state
-            if !markerManager.hasEntity(state.id) {
-                shouldSyncList = true
-            }
         }
 
         markerStatesById = newStatesById
         latestStates = markers.map { $0.state }
 
-        if oldIds != newIds {
-            shouldSyncList = true
-        }
-
-        if isStyleLoaded, shouldSyncList {
+        if isStyleLoaded {
+            // Always call add() so position changes from drag are reflected in tiled markers.
+            // refreshTileLayerIfNeeded() handles the server-restart URL case synchronously.
+            refreshTileLayerIfNeeded()
             Task { [weak self] in
                 guard let self else { return }
                 MCLog.marker("MapLibreMarkerController.syncMarkers -> add()")
                 await self.add(data: self.latestStates)
             }
-        } else if isStyleLoaded {
-            refreshTileLayerIfNeeded()
         }
 
         for marker in markers {
@@ -175,6 +166,18 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
     }
 
     // MARK: - Tiled marker override
+
+    override func update(state: MarkerState) async {
+        await super.update(state: state)
+        // For tiled markers, position changes don't propagate through the regular renderer path.
+        // Invalidate the tile cache so the new position appears on the raster overlay.
+        guard tiledMarkerIds.contains(state.id), let tileRenderer else { return }
+        tileRenderer.invalidate()
+        tileVersion += 1
+        if let style = mapView?.style {
+            updateTileLayer(style: style, hasTiledMarkers: true)
+        }
+    }
 
     override func add(data: [MarkerState]) async {
         guard tilingOptions.enabled else {
