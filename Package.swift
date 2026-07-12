@@ -13,7 +13,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.0.6"),
+        .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.1.4"),
         .package(url: "https://github.com/maplibre/maplibre-gl-native-distribution", from: "6.20.0"),
     ],
     targets: [
