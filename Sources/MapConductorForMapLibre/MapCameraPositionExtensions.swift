@@ -35,14 +35,18 @@ extension MapCameraPosition {
     /// and negative-tilt target shift to match Android's MapCameraPosition.toCameraPosition().
     func toMapLibreCameraState() -> MapLibreCameraState {
         if tilt >= 0 {
+            let mapLibreZoom = MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom(zoom)
+
+            NSLog("MapLibre (in)position=\(position),(in)tilt=\(tilt) / (out)center=\(position), (out)mapLibreZoom=\(mapLibreZoom), (out)tilt=\(tilt)")
+            
             return MapLibreCameraState(
                 center: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
-                zoom: MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom(zoom),
+                zoom: mapLibreZoom,
                 bearing: bearing,
                 tilt: tilt
             )
         }
-
+        
         // tilt < 0: MapLibre cannot represent upward pitch directly.
         // Move the ground target forward and render with abs(tilt) — mirrors Android workaround.
         let tiltAbsDeg = abs(tilt).clamped(to: 0...60)
@@ -52,17 +56,16 @@ extension MapCameraPosition {
         let distanceForward = altitude * cos(tiltAbsRad) * tan(tiltAbsRad) * negativeTiltTargetDistanceScale
         let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: bearing)
         let adjustedZoom = zoom + negativeTiltZoomOffsetAtMaxTilt * (tiltAbsDeg / 60.0)
-
+        
+        let mapLibreZoom = MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom(adjustedZoom)
+        NSLog("MapLibre (in)position=\(position),(in)tilt=\(tilt) / (out)center=\(position), (out)mapLibreZoom=\(mapLibreZoom), (out)tilt=\(tilt)")
+        
         return MapLibreCameraState(
             center: CLLocationCoordinate2D(latitude: target.latitude, longitude: target.longitude),
-            zoom: MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom(adjustedZoom),
+            zoom: mapLibreZoom,
             bearing: bearing,
             tilt: tiltAbsDeg
         )
-    }
-
-    func toMapLibreCameraStateSnapshot() -> MapLibreCameraStateSnapshot {
-        MapLibreCameraStateSnapshot(state: toMapLibreCameraState(), logicalTilt: tilt)
     }
 }
 

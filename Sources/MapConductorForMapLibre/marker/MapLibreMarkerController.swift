@@ -252,27 +252,20 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
     /// Hit-test tiled markers at the given screen point (pts). Returns true if a clickable marker was found.
     func handleTiledMarkerTap(at screenPoint: CGPoint) -> Bool {
         MCLog.marker("MapLibreMarkerController.handleTiledMarkerTap point=\(screenPoint) tiledCount=\(tiledMarkerIds.count)")
-        guard !tiledMarkerIds.isEmpty, let mapView else { return false }
-        let clickRadiusPt: CGFloat = 44
-        var bestState: MarkerState? = nil
-        var bestDist = CGFloat.infinity
-
-        for id in tiledMarkerIds {
-            guard let entity = markerManager.getEntity(id), entity.state.clickable else { continue }
-            let coord = CLLocationCoordinate2D(
-                latitude: entity.state.position.latitude,
-                longitude: entity.state.position.longitude
+        guard !tiledMarkerIds.isEmpty, let mapView, let tileRenderer else { return false }
+        let state = tileRenderer.hitTest(
+            screenPoint: screenPoint,
+            markerIds: tiledMarkerIds,
+            zoom: Int(mapView.zoomLevel.rounded())
+        ) { point in
+            mapView.convert(
+                CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude),
+                toPointTo: mapView
             )
-            let markerPoint = mapView.convert(coord, toPointTo: mapView)
-            let dist = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
-            if dist < clickRadiusPt && dist < bestDist {
-                bestDist = dist
-                bestState = entity.state
-            }
         }
 
-        if let state = bestState {
-            MCLog.marker("MapLibreMarkerController.handleTiledMarkerTap hit id=\(state.id) dist=\(bestDist)")
+        if let state {
+            MCLog.marker("MapLibreMarkerController.handleTiledMarkerTap hit id=\(state.id)")
             dispatchClick(state: state)
             return true
         }
