@@ -52,6 +52,11 @@ public struct MapLibreMapView: View {
             ForEach(0..<mapContent.views.count, id: \.self) { index in
                 mapContent.views[index]
             }
+            MapAttributionOverlay(
+                designRules: state.mapDesignType.attributionRules,
+                rasterLayers: mapContent.rasterLayers,
+                camera: state.cameraPosition
+            )
         }
     }
 }

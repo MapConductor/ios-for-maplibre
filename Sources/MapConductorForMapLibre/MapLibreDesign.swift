@@ -10,10 +10,12 @@ public typealias MapLibreMapDesignType = any MapLibreMapDesignTypeProtocol
 public struct MapLibreDesign: MapLibreMapDesignTypeProtocol, Hashable {
     public let id: String
     public let styleJsonURL: String
+    public let attributionRules: [AttributionRule]
 
-    public init(id: String, styleJsonURL: String) {
+    public init(id: String, styleJsonURL: String, attributionRules: [AttributionRule] = []) {
         self.id = id
         self.styleJsonURL = styleJsonURL
+        self.attributionRules = attributionRules
     }
 
     public func getValue() -> String {
