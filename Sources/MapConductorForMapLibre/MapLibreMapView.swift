@@ -86,6 +86,9 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MLNMapView {
         let mapView = MLNMapView(frame: .zero)
+        // Install the delegate before assigning the style URL. Cached styles can
+        // finish loading quickly, and missing that callback leaves overlays waiting.
+        mapView.delegate = context.coordinator
         // Prefer full-resolution rendering on Retina displays.
         // (MapLibre uses the view's pixel ratio for both tiles and symbols.)
         mapView.contentScaleFactor = UIScreen.main.scale
@@ -96,7 +99,6 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         mapView.prefetchesTiles = false
         mapView.tileCacheEnabled = false
         mapView.isScrollEnabled = state.uiSettings.scrollGesture
-        mapView.delegate = context.coordinator
         let initialCameraState = state.cameraPosition.toMapLibreCameraState()
         mapView.setCenter(
             initialCameraState.center,
@@ -180,6 +182,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             shouldAddMarkers: { [weak self] in self?.isStyleLoaded ?? false }
         )
         private var isStyleLoaded = false
+        private weak var loadedStyle: MLNStyle?
 
         private var didCallMapLoaded = false
         private let infoBubbleContainer = PassthroughContainerView()
@@ -228,16 +231,9 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             let polygonController = MapLibrePolygonController(mapView: mapView)
             self.polygonController = polygonController
             self.hullPolygonController = MapLibrePolygonController(mapView: mapView)
-            if let style = mapView.style {
-                groundImageController.onStyleLoaded(style)
-                rasterController.onStyleLoaded(style)
-                polygonController.onStyleLoaded(style)
-                hullPolygonController?.onStyleLoaded(style)
-                polylineController.onStyleLoaded(style)
-                circleController.onStyleLoaded(style)
-                markerController.onStyleLoaded(style)
+            if let loadedStyle {
+                applyLoadedStyle(loadedStyle)
             }
-
             self.infoBubbleCoordinator = InfoBubbleOverlayCoordinator(
                 container: infoBubbleContainer,
                 project: { [weak self] point in
@@ -291,6 +287,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             infoBubbleCoordinator = nil
             strategyManager.clear()
             isStyleLoaded = false
+            loadedStyle = nil
         }
 
         func updateContent(_ content: MapViewContent) {
@@ -301,7 +298,18 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             markerController?.tilingOptions = content.markerTilingOptions
             markerController?.syncMarkers(content.markers)
             if let mapView {
+                let previousStrategyRenderer = strategyManager.renderer
                 strategyManager.update(content: content, initialCamera: currentCameraPosition(from: mapView))
+                if isStyleLoaded,
+                   strategyManager.renderer !== previousStrategyRenderer,
+                   let style = mapView.style {
+                    // RN native extensions can attach a strategy after
+                    // mapViewDidFinishLoadingMap. The newly-created renderer therefore
+                    // needs the already-loaded style immediately instead of waiting for a
+                    // style callback that has already happened.
+                    strategyManager.renderer?.onStyleLoaded(style)
+                    strategyManager.flush()
+                }
             }
             groundImageController?.syncGroundImages(content.groundImages)
             rasterController?.syncRasterLayers(content.rasterLayers)
@@ -319,19 +327,25 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
 
         // MARK: - MLNMapViewDelegate
 
-        func mapViewDidFinishLoadingMap(_ mapView: MLNMapView) {
+        func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
             isStyleLoaded = true
-            if let style = mapView.style {
-                groundImageController?.onStyleLoaded(style)
-                rasterController?.onStyleLoaded(style)
-                polygonController?.onStyleLoaded(style)
-                hullPolygonController?.onStyleLoaded(style)
-                polylineController?.onStyleLoaded(style)
-                circleController?.onStyleLoaded(style)
-                markerController?.onStyleLoaded(style)
-                strategyManager.renderer?.onStyleLoaded(style)
-                strategyManager.flush()
-            }
+            loadedStyle = style
+            applyLoadedStyle(style)
+        }
+
+        private func applyLoadedStyle(_ style: MLNStyle) {
+            groundImageController?.onStyleLoaded(style)
+            rasterController?.onStyleLoaded(style)
+            polygonController?.onStyleLoaded(style)
+            hullPolygonController?.onStyleLoaded(style)
+            polylineController?.onStyleLoaded(style)
+            circleController?.onStyleLoaded(style)
+            markerController?.onStyleLoaded(style)
+            strategyManager.renderer?.onStyleLoaded(style)
+            strategyManager.flush()
+        }
+
+        func mapViewDidFinishLoadingMap(_ mapView: MLNMapView) {
             if !didCallMapLoaded {
                 didCallMapLoaded = true
                 controller?.notifyMapInitialized()

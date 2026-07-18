@@ -256,7 +256,11 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
         let state = tileRenderer.hitTest(
             screenPoint: screenPoint,
             markerIds: tiledMarkerIds,
-            zoom: Int(mapView.zoomLevel.rounded())
+            zoom: Int(mapView.zoomLevel.rounded()),
+            unproject: { point in
+                let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
+                return GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+            }
         ) { point in
             mapView.convert(
                 CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude),

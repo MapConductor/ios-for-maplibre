@@ -38,6 +38,7 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
     private var rasterStatesById: [String: RasterLayerState] = [:]
     private var latestStates: [RasterLayerState] = []
     private var isStyleLoaded: Bool = false
+    private weak var loadedStyle: MLNStyle?
     private var pendingUpdate: Task<Void, Never>?
     private let networkDelegate = MapLibreRasterNetworkDelegate()
 
@@ -49,8 +50,16 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
     }
 
     func onStyleLoaded(_ style: MLNStyle) {
+        let styleChanged = loadedStyle !== style
+        loadedStyle = style
         isStyleLoaded = true
         renderer.onStyleLoaded(style)
+
+        // A new MLNStyle does not contain handles registered against the old
+        // style. Forget those handles so every desired raster layer is rebuilt.
+        if styleChanged {
+            rasterLayerManager.clear()
+        }
 
         // Add initial layers if they were set before style loaded
         if !latestStates.isEmpty {
@@ -229,6 +238,7 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
         rasterStatesById.removeAll()
         latestStates.removeAll()
         isStyleLoaded = false
+        loadedStyle = nil
         MLNNetworkConfiguration.sharedManager.delegate = nil
         renderer.unbind()
         mapView = nil

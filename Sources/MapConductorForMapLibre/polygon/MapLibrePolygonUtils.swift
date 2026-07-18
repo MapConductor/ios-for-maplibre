@@ -16,13 +16,30 @@ func createMapLibrePolygons(
     let interpolated: [GeoPointProtocol] = (geodesic ? createInterpolatePoints(points, maxSegmentLength: 1000.0) : createLinearInterpolatePoints(points))
         .map { $0.normalize() }
 
-    let interiorPolygons: [MLNPolygon] = holes.compactMap { holePoints in
-        guard !holePoints.isEmpty else { return nil }
-        var coords = ensureClockwiseRing(holePoints).map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
-        return MLNPolygon(coordinates: &coords, count: UInt(coords.count))
-    }
+    let outerRings = splitByMeridian(interpolated, geodesic: geodesic)
+    let includeHoles = !holes.isEmpty && outerRings.count == 1
 
-    return splitByMeridian(interpolated, geodesic: geodesic).enumerated().map { index, ringPoints in
+    let interiorPolygons: [MLNPolygon] = includeHoles ? holes.compactMap { holePoints in
+        let interpolatedHole: [GeoPointProtocol] = (geodesic
+            ? createInterpolatePoints(holePoints, maxSegmentLength: 1000.0)
+            : createLinearInterpolatePoints(holePoints))
+            .map { $0.normalize() }
+        guard interpolatedHole.count >= 3 else { return nil }
+
+        var ring = ensureClockwiseRing(interpolatedHole)
+        if let first = ring.first, let last = ring.last,
+           !(GeoPoint.from(position: first) == GeoPoint.from(position: last)) {
+            ring.append(first)
+        }
+        guard ring.count >= 4 else { return nil }
+
+        var coordinates = ring.map {
+            CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+        }
+        return MLNPolygon(coordinates: &coordinates, count: UInt(coordinates.count))
+    } : []
+
+    return outerRings.enumerated().map { index, ringPoints in
         let normalizedRing: [GeoPointProtocol]
         if let first = ringPoints.first, let last = ringPoints.last, GeoPoint.from(position: first) == GeoPoint.from(position: last) {
             normalizedRing = ringPoints
