@@ -12,7 +12,8 @@ let coreDependency: Package.Dependency = usingLocalCore
 let package = Package(
     name: "mapconductor-for-maplibre",
     platforms: [
-        .iOS(.v15),
+        // See ios-sdk-core/Package.swift's comment: "15.0" must not be used here.
+        .iOS("15.1"),
     ],
     products: [
         .library(
