@@ -7,13 +7,7 @@ import UIKit
 
 public struct MapLibreMapView: View {
     @ObservedObject private var state: MapLibreViewState
-
-    private let onMapLoaded: OnMapLoadedHandler<MapLibreViewState>?
-    private let onMapClick: OnMapEventHandler?
-    private let onMapLongClick: OnMapEventHandler?
-    private let onCameraMoveStart: OnCameraMoveHandler?
-    private let onCameraMove: OnCameraMoveHandler?
-    private let onCameraMoveEnd: OnCameraMoveHandler?
+    private let handlers: MapViewHandlers<MapLibreViewState>
     private let content: () -> MapViewContent
 
     public init(
@@ -24,38 +18,33 @@ public struct MapLibreMapView: View {
         onCameraMoveStart: OnCameraMoveHandler? = nil,
         onCameraMove: OnCameraMoveHandler? = nil,
         onCameraMoveEnd: OnCameraMoveHandler? = nil,
+        sdkInitialize: (() -> Void)? = nil,
         @MapViewContentBuilder content: @escaping () -> MapViewContent = { MapViewContent() }
     ) {
         self.state = state
-        self.onMapLoaded = onMapLoaded
-        self.onMapClick = onMapClick
-        self.onMapLongClick = onMapLongClick
-        self.onCameraMoveStart = onCameraMoveStart
-        self.onCameraMove = onCameraMove
-        self.onCameraMoveEnd = onCameraMoveEnd
+        self.handlers = MapViewHandlers(
+            onMapLoaded: onMapLoaded,
+            onMapClick: onMapClick,
+            onMapLongClick: onMapLongClick,
+            onCameraMoveStart: onCameraMoveStart,
+            onCameraMove: onCameraMove,
+            onCameraMoveEnd: onCameraMoveEnd,
+            sdkInitialize: sdkInitialize
+        )
         self.content = content
     }
 
     public var body: some View {
         let mapContent = content()
-        return ZStack {
+        return MapViewBase(
+            attributionRules: state.mapDesignType.attributionRules,
+            camera: state.cameraPosition,
+            content: mapContent
+        ) {
             MapLibreMapViewRepresentable(
                 state: state,
-                onMapLoaded: onMapLoaded,
-                onMapClick: onMapClick,
-                onMapLongClick: onMapLongClick,
-                onCameraMoveStart: onCameraMoveStart,
-                onCameraMove: onCameraMove,
-                onCameraMoveEnd: onCameraMoveEnd,
+                handlers: handlers,
                 content: mapContent
-            )
-            ForEach(0..<mapContent.views.count, id: \.self) { index in
-                mapContent.views[index]
-            }
-            MapAttributionOverlay(
-                designRules: state.mapDesignType.attributionRules,
-                rasterLayers: mapContent.rasterLayers,
-                camera: state.cameraPosition
             )
         }
     }
@@ -63,28 +52,17 @@ public struct MapLibreMapView: View {
 
 private struct MapLibreMapViewRepresentable: UIViewRepresentable {
     @ObservedObject var state: MapLibreViewState
-
-    let onMapLoaded: OnMapLoadedHandler<MapLibreViewState>?
-    let onMapClick: OnMapEventHandler?
-    let onMapLongClick: OnMapEventHandler?
-    let onCameraMoveStart: OnCameraMoveHandler?
-    let onCameraMove: OnCameraMoveHandler?
-    let onCameraMoveEnd: OnCameraMoveHandler?
+    let handlers: MapViewHandlers<MapLibreViewState>
     let content: MapViewContent
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(
-            state: state,
-            onMapLoaded: onMapLoaded,
-            onMapClick: onMapClick,
-            onMapLongClick: onMapLongClick,
-            onCameraMoveStart: onCameraMoveStart,
-            onCameraMove: onCameraMove,
-            onCameraMoveEnd: onCameraMoveEnd
-        )
+        Coordinator(state: state, handlers: handlers)
     }
 
     func makeUIView(context: Context) -> MLNMapView {
+        if let sdkInitialize = handlers.sdkInitialize {
+            Coordinator.runOnce(sdkInitialize)
+        }
         let mapView = MLNMapView(frame: .zero)
         // Install the delegate before assigning the style URL. Cached styles can
         // finish loading quickly, and missing that callback leaves overlays waiting.
@@ -96,8 +74,14 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         if let styleURL = URL(string: state.mapDesignType.styleJsonURL) {
             mapView.styleURL = styleURL
         }
-        mapView.prefetchesTiles = false
-        mapView.tileCacheEnabled = false
+        // Prefetch parent tiles for smoother zoom, and cache rendered tiles.
+        // Marker raster tiles are safe to cache because their URL carries a
+        // `version` that is bumped whenever markers change (see
+        // MapLibreMarkerController.updateTileLayer), so a cached tile can never
+        // be stale — while avoiding re-rendering identical marker PNG tiles on
+        // every zoom in/out.
+        mapView.prefetchesTiles = true
+        mapView.tileCacheEnabled = true
         mapView.isScrollEnabled = state.uiSettings.scrollGesture
         let initialCameraState = state.cameraPosition.toMapLibreCameraState()
         mapView.setCenter(
@@ -151,15 +135,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, MLNMapViewDelegate {
-        private let state: MapLibreViewState
-        private let onMapLoaded: OnMapLoadedHandler<MapLibreViewState>?
-        private let onMapClick: OnMapEventHandler?
-        private let onMapLongClick: OnMapEventHandler?
-        private let onCameraMoveStart: OnCameraMoveHandler?
-        private let onCameraMove: OnCameraMoveHandler?
-        private let onCameraMoveEnd: OnCameraMoveHandler?
-
+    final class Coordinator: MapViewCoordinatorBase<MapLibreViewState>, MLNMapViewDelegate {
         weak var mapView: MLNMapView?
         private var controller: MapLibreViewController?
         private var markerController: MapLibreMarkerController?
@@ -169,6 +145,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         private var polylineController: MapLibrePolylineController?
         private var polygonController: MapLibrePolygonController?
         private var hullPolygonController: MapLibrePolygonController?
+        private var overlayScope: MapOverlayScope?
         private var infoBubbleCoordinator: InfoBubbleOverlayCoordinator?
         private lazy var strategyManager = StrategyMarkerManager<MLNPointFeature, MapLibreMarkerRenderer>(
             makeRenderer: { [weak self] strategy in
@@ -184,32 +161,11 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         private var isStyleLoaded = false
         private weak var loadedStyle: MLNStyle?
 
-        private var didCallMapLoaded = false
-        private let infoBubbleContainer = PassthroughContainerView()
-
-        init(
-            state: MapLibreViewState,
-            onMapLoaded: OnMapLoadedHandler<MapLibreViewState>?,
-            onMapClick: OnMapEventHandler?,
-            onMapLongClick: OnMapEventHandler?,
-            onCameraMoveStart: OnCameraMoveHandler?,
-            onCameraMove: OnCameraMoveHandler?,
-            onCameraMoveEnd: OnCameraMoveHandler?
-        ) {
-            self.state = state
-            self.onMapLoaded = onMapLoaded
-            self.onMapClick = onMapClick
-            self.onMapLongClick = onMapLongClick
-            self.onCameraMoveStart = onCameraMoveStart
-            self.onCameraMove = onCameraMove
-            self.onCameraMoveEnd = onCameraMoveEnd
-        }
-
         func bind(state: MapLibreViewState, mapView: MLNMapView) {
             let controller = MapLibreViewController(mapView: mapView)
             self.controller = controller
             state.setController(controller)
-            state.setMapViewHolder(controller.holder)
+            state.setMapViewHolder(controller.typedHolder)
 
             let markerController = MapLibreMarkerController(mapView: mapView) { [weak self] id in
                 self?.infoBubbleCoordinator?.updateInfoBubblePosition(for: id)
@@ -231,6 +187,16 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             let polygonController = MapLibrePolygonController(mapView: mapView)
             self.polygonController = polygonController
             self.hullPolygonController = MapLibrePolygonController(mapView: mapView)
+
+            let overlayScope = MapOverlayScope()
+            self.overlayScope = overlayScope
+            bindOverlayCollector(overlayScope.circleCollector, to: circleController)
+            bindOverlayCollector(overlayScope.polylineCollector, to: polylineController)
+            bindOverlayCollector(overlayScope.polygonCollector, to: polygonController)
+            bindOverlayCollector(overlayScope.rasterLayerCollector, to: rasterController)
+            // GroundImage is not a core GroundImageController subclass on MapLibre,
+            // so it stays on its own sync path (below), not the collector.
+
             if let loadedStyle {
                 applyLoadedStyle(loadedStyle)
             }
@@ -283,6 +249,8 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             polygonController = nil
             hullPolygonController?.unbind()
             hullPolygonController = nil
+            overlayScope?.clear()
+            overlayScope = nil
             infoBubbleCoordinator?.unbind()
             infoBubbleCoordinator = nil
             strategyManager.clear()
@@ -312,10 +280,10 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                 }
             }
             groundImageController?.syncGroundImages(content.groundImages)
-            rasterController?.syncRasterLayers(content.rasterLayers)
-            circleController?.syncCircles(content.circles)
-            polylineController?.syncPolylines(content.polylines)
-            polygonController?.syncPolygons(content.polygons)
+            overlayScope?.rasterLayerCollector.sync(content.rasterLayers.map { $0.state })
+            overlayScope?.circleCollector.sync(content.circles.map { $0.state })
+            overlayScope?.polylineCollector.sync(content.polylines.map { $0.state })
+            overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
             for handler in content.polygonSyncHandlers {
                 let hullController = hullPolygonController
                 handler.bindPolygonSync { [weak hullController] states in
@@ -341,13 +309,18 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             polylineController?.onStyleLoaded(style)
             circleController?.onStyleLoaded(style)
             markerController?.onStyleLoaded(style)
+            // Re-emit collector-routed overlays now the style is ready, in case
+            // add() ran before load (idempotent). Parity with Mapbox.
+            overlayScope?.rasterLayerCollector.flush()
+            overlayScope?.circleCollector.flush()
+            overlayScope?.polylineCollector.flush()
+            overlayScope?.polygonCollector.flush()
             strategyManager.renderer?.onStyleLoaded(style)
             strategyManager.flush()
         }
 
         func mapViewDidFinishLoadingMap(_ mapView: MLNMapView) {
-            if !didCallMapLoaded {
-                didCallMapLoaded = true
+            performMapLoadedOnce {
                 controller?.notifyMapInitialized()
                 onMapLoaded?(state)
             }
@@ -472,15 +445,6 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                 logicalTiltHint: controller?.lastLogicalTilt,
                 visibleRegion: visibleRegion
             )
-        }
-
-        fileprivate func attachInfoBubbleContainer(to mapView: MLNMapView) {
-            guard infoBubbleContainer.superview !== mapView else { return }
-            infoBubbleContainer.backgroundColor = .clear
-            infoBubbleContainer.isUserInteractionEnabled = true  // Enable interaction for InfoBubble buttons
-            infoBubbleContainer.frame = mapView.bounds
-            infoBubbleContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            mapView.addSubview(infoBubbleContainer)
         }
 
         fileprivate func updateInfoBubbleLayouts() {

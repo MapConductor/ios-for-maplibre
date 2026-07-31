@@ -10,7 +10,9 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
     @Published private var _uiSettings: MapUISettings
 
     private var controller: (any MapViewControllerProtocol)?
-    private var mapViewHolder: AnyMapViewHolder?
+
+    /// Provider-typed holder: `map`/`mapView` are `MLNMapView`, no cast needed.
+    public private(set) var mapViewHolder: MapLibreMapViewHolder?
 
     public override var id: String { stateId }
 
@@ -70,7 +72,7 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
     }
 
     public override func getMapViewHolder() -> AnyMapViewHolder? {
-        mapViewHolder
+        mapViewHolder.map { AnyMapViewHolder($0) }
     }
 
     func setController(_ controller: (any MapViewControllerProtocol)?) {
@@ -80,7 +82,7 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
         }
     }
 
-    func setMapViewHolder(_ holder: AnyMapViewHolder?) {
+    func setMapViewHolder(_ holder: MapLibreMapViewHolder?) {
         mapViewHolder = holder
     }
 

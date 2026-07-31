@@ -6,6 +6,7 @@ import UIKit
 
 final class MapLibreViewController: MapViewControllerProtocol {
     let holder: AnyMapViewHolder
+    let typedHolder: MapLibreMapViewHolder
     let coroutine = CoroutineScope()
     private weak var mapView: MLNMapView?
     private var cameraAnimator: CameraAnimator?
@@ -20,7 +21,9 @@ final class MapLibreViewController: MapViewControllerProtocol {
 
     init(mapView: MLNMapView) {
         self.mapView = mapView
-        self.holder = AnyMapViewHolder(MapLibreViewHolder(mapView: mapView))
+        let typedHolder = MapLibreMapViewHolder(mapView: mapView)
+        self.typedHolder = typedHolder
+        self.holder = AnyMapViewHolder(typedHolder)
     }
 
     func clearOverlays() async {
