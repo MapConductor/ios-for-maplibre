@@ -3,16 +3,16 @@ import MapLibre
 import UIKit
 
 @MainActor
-final class MapLibreCircleOverlayRenderer: AbstractCircleOverlayRenderer<MLNPointFeature> {
+final class MapLibreCircleOverlayRenderer: AbstractCircleOverlayRenderer<MLNPolygonFeature> {
     private weak var mapView: MLNMapView?
     private var style: MLNStyle?
 
     let circleLayer: CircleLayer
-    private let circleManager: CircleManager<MLNPointFeature>
+    private let circleManager: CircleManager<MLNPolygonFeature>
 
     init(
         mapView: MLNMapView?,
-        circleManager: CircleManager<MLNPointFeature>,
+        circleManager: CircleManager<MLNPolygonFeature>,
         circleLayer: CircleLayer
     ) {
         self.mapView = mapView
@@ -34,24 +34,24 @@ final class MapLibreCircleOverlayRenderer: AbstractCircleOverlayRenderer<MLNPoin
         mapView = nil
     }
 
-    override func createCircle(state: CircleState) async -> MLNPointFeature? {
+    override func createCircle(state: CircleState) async -> MLNPolygonFeature? {
         makeFeature(for: state)
     }
 
     override func updateCircleProperties(
-        circle: MLNPointFeature,
-        current: CircleEntity<MLNPointFeature>,
-        prev: CircleEntity<MLNPointFeature>
-    ) async -> MLNPointFeature? {
+        circle: MLNPolygonFeature,
+        current: CircleEntity<MLNPolygonFeature>,
+        prev: CircleEntity<MLNPolygonFeature>
+    ) async -> MLNPolygonFeature? {
         makeFeature(for: current.state)
     }
 
-    override func removeCircle(entity: CircleEntity<MLNPointFeature>) async {
+    override func removeCircle(entity: CircleEntity<MLNPolygonFeature>) async {
         // Removal is handled by redrawing all remaining circles in onPostProcess.
     }
 
     override func onPostProcess() async {
-        let features = circleManager.allEntities().compactMap { entity -> MLNPointFeature? in
+        let features = circleManager.allEntities().compactMap { entity -> MLNPolygonFeature? in
             let updated = makeFeature(for: entity.state)
             entity.circle = updated
             return updated
@@ -59,19 +59,21 @@ final class MapLibreCircleOverlayRenderer: AbstractCircleOverlayRenderer<MLNPoin
         circleLayer.setFeatures(features)
     }
 
-    private func makeFeature(for state: CircleState) -> MLNPointFeature {
-        let feature = MLNPointFeature()
-        feature.coordinate = CLLocationCoordinate2D(latitude: state.center.latitude, longitude: state.center.longitude)
+    /// The core `circleToRing` generates the ring. The ring is unwrapped (continuous
+    /// longitudes around the center), and MapLibre GL accepts longitudes beyond +/-180, so a
+    /// circle crossing the antimeridian renders as a single polygon without splitting.
+    private func makeFeature(for state: CircleState) -> MLNPolygonFeature {
+        let ring = closeRing(circleToRing(
+            center: state.center,
+            radiusMeters: state.radiusMeters,
+            geodesic: state.geodesic
+        ))
+        var coords = ring.isEmpty
+            ? [CLLocationCoordinate2D(latitude: state.center.latitude, longitude: state.center.longitude)]
+            : ring.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        let feature = MLNPolygonFeature(coordinates: &coords, count: UInt(coords.count))
         feature.identifier = "circle-\(state.id)" as NSString
-
-        // Match the app-level camera zoom abstraction used across providers.
-        let zoom = MapLibreZoomAltitudeConverter.maplibreZoomToGoogleZoom(mapView?.zoomLevel ?? 0.0)
-        let metersPerPixel = calculateMetersPerPixel(latitude: state.center.latitude, zoom: zoom)
-        // MapLibre's circleRadius matches the rendered pixel grid, so do not divide by UIScreen scale here.
-        let radiusPixels = metersPerPixel > 0 ? (state.radiusMeters / metersPerPixel) : 0.0
-
         feature.attributes = [
-            CircleLayer.Prop.radiusPixels: radiusPixels,
             CircleLayer.Prop.fillColor: state.fillColor,
             CircleLayer.Prop.strokeColor: state.strokeColor,
             CircleLayer.Prop.strokeWidth: state.strokeWidth,

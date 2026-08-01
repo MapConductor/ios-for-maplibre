@@ -1,9 +1,14 @@
 import Foundation
 import MapLibre
 
+/// Draws circles as "fill (MLNFillStyleLayer) + stroke (MLNLineStyleLayer)".
+///
+/// Circles were previously drawn with a native MLNCircleStyleLayer (screen-pixel radius
+/// expression), but that cannot express geodesic circles (rings equidistant along great
+/// circles, which are not perfect circles in Mercator). Instead the ring polygon produced by
+/// the core `circleToRing` is rendered, matching the polygon layer plumbing.
 final class CircleLayer {
     enum Prop {
-        static let radiusPixels = "radiusPixels"
         static let fillColor = "fillColor"
         static let strokeColor = "strokeColor"
         static let strokeWidth = "strokeWidth"
@@ -11,23 +16,29 @@ final class CircleLayer {
     }
 
     let sourceId: String
+    /// Fill layer keeps the historical `layerId` so existing ordering anchors stay valid.
     let layerId: String
+    let strokeLayerId: String
 
     private(set) var source: MLNShapeSource?
-    private(set) var layer: MLNCircleStyleLayer?
+    private(set) var fillLayer: MLNFillStyleLayer?
+    private(set) var strokeLayer: MLNLineStyleLayer?
 
     init(sourceId: String, layerId: String) {
         self.sourceId = sourceId
         self.layerId = layerId
+        self.strokeLayerId = "\(layerId)-stroke"
     }
 
     func ensureAdded(to style: MLNStyle) {
         let existingSource = style.source(withIdentifier: sourceId) as? MLNShapeSource
-        let existingLayer = style.layer(withIdentifier: layerId) as? MLNCircleStyleLayer
+        let existingFill = style.layer(withIdentifier: layerId) as? MLNFillStyleLayer
+        let existingStroke = style.layer(withIdentifier: strokeLayerId) as? MLNLineStyleLayer
 
-        if let existingSource, let existingLayer {
+        if let existingSource, let existingFill, let existingStroke {
             source = existingSource
-            layer = existingLayer
+            fillLayer = existingFill
+            strokeLayer = existingStroke
             return
         }
 
@@ -36,32 +47,43 @@ final class CircleLayer {
             style.addSource(source)
         }
 
-        let layer = existingLayer ?? MLNCircleStyleLayer(identifier: layerId, source: source)
-        if existingLayer == nil {
-            layer.circleRadius = NSExpression(forKeyPath: Prop.radiusPixels)
-            layer.circleColor = NSExpression(forKeyPath: Prop.fillColor)
-            layer.circleStrokeColor = NSExpression(forKeyPath: Prop.strokeColor)
-            layer.circleStrokeWidth = NSExpression(forKeyPath: Prop.strokeWidth)
-            style.addLayer(layer)
+        let fillLayer = existingFill ?? MLNFillStyleLayer(identifier: layerId, source: source)
+        if existingFill == nil {
+            fillLayer.fillColor = NSExpression(forKeyPath: Prop.fillColor)
+            style.addLayer(fillLayer)
+        }
+
+        let strokeLayer = existingStroke ?? MLNLineStyleLayer(identifier: strokeLayerId, source: source)
+        if existingStroke == nil {
+            strokeLayer.lineColor = NSExpression(forKeyPath: Prop.strokeColor)
+            strokeLayer.lineWidth = NSExpression(forKeyPath: Prop.strokeWidth)
+            strokeLayer.lineJoin = NSExpression(forConstantValue: "round")
+            strokeLayer.lineCap = NSExpression(forConstantValue: "round")
+            style.insertLayer(strokeLayer, above: fillLayer)
         }
 
         self.source = source
-        self.layer = layer
+        self.fillLayer = fillLayer
+        self.strokeLayer = strokeLayer
     }
 
-    func setFeatures(_ features: [MLNPointFeature]) {
+    func setFeatures(_ features: [MLNPolygonFeature]) {
         guard let source else { return }
         source.shape = MLNShapeCollectionFeature(shapes: features)
     }
 
     func remove(from style: MLNStyle) {
-        if let layer {
-            style.removeLayer(layer)
+        if let strokeLayer {
+            style.removeLayer(strokeLayer)
+        }
+        if let fillLayer {
+            style.removeLayer(fillLayer)
         }
         if let source {
             style.removeSource(source)
         }
-        self.layer = nil
+        self.strokeLayer = nil
+        self.fillLayer = nil
         self.source = nil
     }
 }
