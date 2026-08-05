@@ -33,8 +33,19 @@ final class MapLibrePolygonOverlayRenderer: AbstractPolygonOverlayRenderer<[MLNP
         mapView = nil
     }
 
+    /// 複数の穴が重なっている場合は結合（union）して重複を解消する。
+    /// 他プロバイダ（ArcGIS/Mapbox/HERE/Google）と同じ `unionHoles()` を用いる。
+    ///
+    /// MapLibre は Polygon の inner ring で複数の穴を描けるが、偶奇規則なので重なった穴は
+    /// 打ち消し合い、重なり部分が塗られてしまう。コンポーネント層（`Polygon`）のユニオンは
+    /// state 1 インスタンスにつき 1 回きりで、頂点ドラッグ後の `state.holes` 差し替えには
+    /// 追従しないため、android-for-maplibre と同じくここでも結合する。
+    private func resolveHoles(_ state: PolygonState) -> PolygonState {
+        state.holes.count > 1 ? state.unionHoles() : state
+    }
+
     override func createPolygon(state: PolygonState) async -> [MLNPolygonFeature]? {
-        let resolved = state.holes.count > 1 ? state.unionHoles() : state
+        let resolved = resolveHoles(state)
         let features = createMapLibrePolygons(
             id: resolved.id,
             points: resolved.points,

@@ -182,9 +182,9 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
 
         switch animation {
         case .Drop:
-            await animateMarkerDrop(entity: entity, duration: 0.3)  // 300ms
+            await animateMarkerDrop(entity: entity, duration: Settings.Default.markerDropAnimateInterval)
         case .Bounce:
-            await animateMarkerBounce(entity: entity, duration: 2.0)  // 2000ms
+            await animateMarkerBounce(entity: entity, duration: Settings.Default.markerBounceAnimateInterval)
         }
     }
 

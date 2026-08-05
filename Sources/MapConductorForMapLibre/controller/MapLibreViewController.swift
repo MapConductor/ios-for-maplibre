@@ -19,6 +19,48 @@ final class MapLibreViewController: MapViewControllerProtocol {
     private var mapLongClickListener: OnMapEventHandler?
     private var mapInitializedListener: OnMapInitializedHandler?
 
+    /// パン範囲の制限に使う。
+    ///
+    /// MapLibre iOS でのパン範囲制限は 2 系統に分かれる:
+    ///
+    /// - **ジェスチャー**: `MLNMapViewDelegate` の
+    ///   `mapView(_:shouldChangeFrom:to:reason:)` で範囲外への変更を拒否する
+    ///   （``shouldAllowGestureCameraChange(from:to:)``）。境界で滑らかに止まるので、
+    ///   android-for-maplibre の `setLatLngBoundsForCameraTarget` に最も近い挙動になる。
+    /// - **プログラム的な移動**: 上記デリゲートはヘッダに明記されているとおり
+    ///   `centerCoordinate` 設定や `flyToCamera` では呼ばれないため、カメラ停止時に
+    ///   このクランプで矩形内へ引き戻す（android-sdk の HERE/ArcGIS/TomTom と同じ方式）。
+    ///
+    /// ズームはネイティブの `minimumZoomLevel` / `maximumZoomLevel` で制限する。
+    let cameraRestrictionClamp = CameraRestrictionClamp()
+
+    /// ジェスチャーによるカメラ変更を許可してよいか。
+    ///
+    /// 制限矩形の外へ出る変更だけを拒否する。すでに範囲外にいる場合は許可する
+    /// （拒否すると範囲外に取り残されて二度と戻れなくなるため。復帰は停止時の
+    /// クランプが行う）。
+    func shouldAllowGestureCameraChange(
+        from oldCenter: CLLocationCoordinate2D,
+        to newCenter: CLLocationCoordinate2D
+    ) -> Bool {
+        guard let bounds = cameraRestrictionClamp.current?.bounds,
+              let sw = bounds.southWest,
+              let ne = bounds.northEast else { return true }
+
+        let south = min(sw.latitude, ne.latitude)
+        let north = max(sw.latitude, ne.latitude)
+        let west = min(sw.longitude, ne.longitude)
+        let east = max(sw.longitude, ne.longitude)
+
+        func isInside(_ c: CLLocationCoordinate2D) -> Bool {
+            c.latitude >= south && c.latitude <= north
+                && c.longitude >= west && c.longitude <= east
+        }
+
+        if isInside(newCenter) { return true }
+        return !isInside(oldCenter)
+    }
+
     init(mapView: MLNMapView) {
         self.mapView = mapView
         let typedHolder = MapLibreMapViewHolder(mapView: mapView)
@@ -94,6 +136,31 @@ final class MapLibreViewController: MapViewControllerProtocol {
             duration: durationSeconds
         )
         cameraAnimator?.start()
+    }
+
+    func setCameraRestriction(_ restriction: CameraRestriction?) {
+        cameraRestrictionClamp.set(restriction)
+        guard let mapView = mapView else { return }
+        // ズームはネイティブ API で制限する。統一ズーム（Google 準拠）を MapLibre ズームへ変換。
+        // preference は解除 API が無いため、未指定時は既定の下限/上限を渡す
+        // （android-for-maplibre と同じ扱い）。
+        mapView.minimumZoomLevel = restriction?.minZoom
+            .map { MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom($0) }
+            ?? 0.0
+        mapView.maximumZoomLevel = restriction?.maxZoom
+            .map { MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom($0) }
+            ?? 22.0
+    }
+
+    /// カメラ停止時にパン範囲の制限違反を補正する。違反があれば `true`（通常の
+    /// カメラ停止処理はスキップし、再適用後のイベントで進む）。
+    ///
+    /// ジェスチャーは ``shouldAllowGestureCameraChange(from:to:)`` が境界で止めるので、
+    /// ここに来るのは主にプログラム的な `moveCameraTo` による範囲外移動。
+    func applyCameraRestrictionCorrectionIfNeeded(_ current: MapCameraPosition) -> Bool {
+        guard let corrected = cameraRestrictionClamp.correction(for: current) else { return false }
+        moveCamera(position: corrected)
+        return true
     }
 
     func fitBounds(bounds: GeoRectBounds, padding: Int) {

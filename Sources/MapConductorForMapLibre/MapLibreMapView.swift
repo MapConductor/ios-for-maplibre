@@ -8,10 +8,12 @@ import UIKit
 public struct MapLibreMapView: View {
     @ObservedObject private var state: MapLibreViewState
     private let handlers: MapViewHandlers<MapLibreViewState>
+    private let cameraRestriction: CameraRestriction?
     private let content: () -> MapViewContent
 
     public init(
         state: MapLibreViewState,
+        cameraRestriction: CameraRestriction? = nil,
         onMapLoaded: OnMapLoadedHandler<MapLibreViewState>? = nil,
         onMapClick: OnMapEventHandler? = nil,
         onMapLongClick: OnMapEventHandler? = nil,
@@ -31,11 +33,18 @@ public struct MapLibreMapView: View {
             onCameraMoveEnd: onCameraMoveEnd,
             sdkInitialize: sdkInitialize
         )
+        self.cameraRestriction = cameraRestriction
         self.content = content
     }
 
     public var body: some View {
-        let mapContent = content()
+        // The provider's registry is in scope only while content is being assembled —
+        // the same window in which Compose provides `LocalMapServiceRegistry` around the
+        // content lambda. Bracketing the pass lets a removed plugin be noticed.
+        let support = state.serviceRegistry.get(MarkerRenderingSupportKey.self)
+        support?.beginContentPass()
+        let mapContent = MapServiceRegistryScope.with(state.serviceRegistry) { content() }
+        support?.endContentPass()
         return MapViewBase(
             attributionRules: state.mapDesignType.attributionRules,
             camera: state.cameraPosition,
@@ -44,6 +53,7 @@ public struct MapLibreMapView: View {
             MapLibreMapViewRepresentable(
                 state: state,
                 handlers: handlers,
+                cameraRestriction: cameraRestriction,
                 content: mapContent
             )
         }
@@ -53,6 +63,7 @@ public struct MapLibreMapView: View {
 private struct MapLibreMapViewRepresentable: UIViewRepresentable {
     @ObservedObject var state: MapLibreViewState
     let handlers: MapViewHandlers<MapLibreViewState>
+    let cameraRestriction: CameraRestriction?
     let content: MapViewContent
 
     func makeCoordinator() -> Coordinator {
@@ -83,6 +94,9 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         mapView.prefetchesTiles = true
         mapView.tileCacheEnabled = true
         mapView.isScrollEnabled = state.uiSettings.scrollGesture
+        mapView.isZoomEnabled = state.uiSettings.zoomGesture
+        mapView.isRotateEnabled = state.uiSettings.rotateGesture
+        mapView.isPitchEnabled = state.uiSettings.tiltGesture
         let initialCameraState = state.cameraPosition.toMapLibreCameraState()
         mapView.setCenter(
             initialCameraState.center,
@@ -108,6 +122,9 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
         context.coordinator.attachInfoBubbleContainer(to: mapView)
         context.coordinator.mapView = mapView
         context.coordinator.bind(state: state, mapView: mapView)
+        // android-sdk の `MapLibreMapView.kt` がコントローラ生成直後に
+        // `cameraRestriction?.let { controller.setCameraRestriction(it) }` するのと同じ位置。
+        context.coordinator.applyCameraRestriction(cameraRestriction)
         // Ensure overlay controllers subscribe immediately (before the first updateUIView),
         // so early UI actions (e.g. tapping animation buttons) are not missed.
         MCLog.map("MapLibreMapView.makeUIView updateContent markers=\(content.markers.count) bubbles=\(content.infoBubbles.count)")
@@ -124,6 +141,11 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             uiView.styleURL = styleURL
         }
         uiView.isScrollEnabled = state.uiSettings.scrollGesture
+        uiView.isZoomEnabled = state.uiSettings.zoomGesture
+        uiView.isRotateEnabled = state.uiSettings.rotateGesture
+        uiView.isPitchEnabled = state.uiSettings.tiltGesture
+        // 制限値が変わったときだけ再適用する（毎フレーム native API を叩かない）。
+        context.coordinator.applyCameraRestriction(cameraRestriction)
         MCLog.map("MapLibreMapView.updateUIView updateContent markers=\(content.markers.count) bubbles=\(content.infoBubbles.count)")
         context.coordinator.updateContent(content)
         context.coordinator.updateInfoBubbleLayouts()
@@ -156,12 +178,36 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                 )
                 return MapLibreMarkerRenderer(mapView: mapView, markerManager: strategy.markerManager, markerLayer: layer)
             },
-            shouldAddMarkers: { [weak self] in self?.isStyleLoaded ?? false }
+            shouldAddMarkers: { [weak self] in self?.isStyleLoaded ?? false },
+            currentCamera: { [weak self] in
+                guard let self, let mapView = self.mapView else { return nil }
+                return self.currentCameraPosition(from: mapView)
+            }
         )
         private var isStyleLoaded = false
         private weak var loadedStyle: MLNStyle?
+        /// android-sdk の `cameraRestriction?.let { controller.setCameraRestriction(it) }` 相当。
+        /// 変化検知は `MapViewCoordinatorBase.applyCameraRestriction(_:to:)` が行う。
+        func applyCameraRestriction(_ restriction: CameraRestriction?) {
+            applyCameraRestriction(restriction, to: controller)
+        }
 
         func bind(state: MapLibreViewState, mapView: MLNMapView) {
+            // A strategy can be connected after mapViewDidFinishLoadingMap (the plugin drives
+            // this now, during content assembly), so a freshly created renderer has to be given
+            // the already-loaded style instead of waiting for a style callback that has passed.
+            strategyManager.onRendererCreated = { [weak self] renderer in
+                guard let self, self.isStyleLoaded, let style = self.mapView?.style else { return }
+                renderer.onStyleLoaded(style)
+                self.strategyManager.flush()
+            }
+            // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
+            // from the registry; this provider never learns that clustering exists.
+            // 再バインド時に前回の capability が残らないよう、登録前に空にする
+            // （android-sdk の各 *MapView.kt が `registry.clear()` してから put するのと同じ）。
+            state.serviceRegistry.clear()
+            state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
+
             let controller = MapLibreViewController(mapView: mapView)
             self.controller = controller
             state.setController(controller)
@@ -265,20 +311,6 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
             markerController?.tilingOptions = content.markerTilingOptions
             markerController?.syncMarkers(content.markers)
-            if let mapView {
-                let previousStrategyRenderer = strategyManager.renderer
-                strategyManager.update(content: content, initialCamera: currentCameraPosition(from: mapView))
-                if isStyleLoaded,
-                   strategyManager.renderer !== previousStrategyRenderer,
-                   let style = mapView.style {
-                    // RN native extensions can attach a strategy after
-                    // mapViewDidFinishLoadingMap. The newly-created renderer therefore
-                    // needs the already-loaded style immediately instead of waiting for a
-                    // style callback that has already happened.
-                    strategyManager.renderer?.onStyleLoaded(style)
-                    strategyManager.flush()
-                }
-            }
             groundImageController?.syncGroundImages(content.groundImages)
             overlayScope?.rasterLayerCollector.sync(content.rasterLayers.map { $0.state })
             overlayScope?.circleCollector.sync(content.circles.map { $0.state })
@@ -327,6 +359,25 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
             updateInfoBubbleLayouts()
         }
 
+        /// ジェスチャーによるカメラ変更を範囲制限で拒否する。
+        ///
+        /// MapLibre iOS が用意している唯一のカメラ範囲制限フック。境界で滑らかに止まるため、
+        /// android-for-maplibre の `setLatLngBoundsForCameraTarget` に最も近い挙動になる。
+        /// なおヘッダに明記されているとおり、このデリゲートはプログラム的なカメラ変更
+        /// （`centerCoordinate` 設定や `flyToCamera`）では呼ばれない。そちらは
+        /// `regionDidChangeAnimated` 側のクランプが担当する。
+        func mapView(
+            _ mapView: MLNMapView,
+            shouldChangeFrom oldCamera: MLNMapCamera,
+            to newCamera: MLNMapCamera,
+            reason: MLNCameraChangeReason
+        ) -> Bool {
+            controller?.shouldAllowGestureCameraChange(
+                from: oldCamera.centerCoordinate,
+                to: newCamera.centerCoordinate
+            ) ?? true
+        }
+
         func mapView(_ mapView: MLNMapView, regionWillChangeAnimated animated: Bool) {
             let camera = currentCameraPosition(from: mapView)
             polylineController?.setCurrentCameraPosition(camera)
@@ -356,6 +407,10 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
 
         func mapView(_ mapView: MLNMapView, regionDidChangeAnimated animated: Bool) {
             let camera = currentCameraPosition(from: mapView)
+            // パン範囲の制限に違反していれば矩形内へ引き戻す（MapLibre iOS にはネイティブの
+            // 範囲制限 API が無いため）。再適用すると regionDidChange が再発火し、
+            // そこでは補正不要になり通常フローへ進む。android-sdk の HERE/ArcGIS/TomTom と同じ方式。
+            if controller?.applyCameraRestrictionCorrectionIfNeeded(camera) == true { return }
             state.updateCameraPosition(camera)
             polylineController?.setCurrentCameraPosition(camera)
             controller?.notifyCameraMoveEnd(camera)

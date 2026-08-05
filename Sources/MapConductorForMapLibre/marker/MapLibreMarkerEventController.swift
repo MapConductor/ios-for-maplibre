@@ -10,6 +10,9 @@ final class MapLibreMarkerEventController {
     private let markerController: MapLibreMarkerController
 
     private var draggingMarkerId: String?
+    /// Panning is suppressed while a marker is dragged; remember what it was so
+    /// an app that set `uiSettings.scrollGesture = false` keeps that setting.
+    private var scrollEnabledBeforeDrag: Bool?
 
     init(mapView: MLNMapView?, markerController: MapLibreMarkerController) {
         self.mapView = mapView
@@ -38,6 +41,7 @@ final class MapLibreMarkerEventController {
                   let state = markerController.getMarkerState(for: markerId),
                   state.draggable else { return false }
             draggingMarkerId = markerId
+            scrollEnabledBeforeDrag = mapView.isScrollEnabled
             mapView.isScrollEnabled = false
             markerController.dispatchDragStart(state: state)
             markerController.onUpdateInfoBubble(markerId)
@@ -53,18 +57,18 @@ final class MapLibreMarkerEventController {
         case .ended:
             guard let markerId = draggingMarkerId,
                   let state = markerController.getMarkerState(for: markerId) else {
-                mapView.isScrollEnabled = true
+                mapView.isScrollEnabled = scrollEnabledBeforeDrag ?? true; scrollEnabledBeforeDrag = nil
                 draggingMarkerId = nil
                 return false
             }
             markerController.dispatchDragEnd(state: state)
-            mapView.isScrollEnabled = true
+            mapView.isScrollEnabled = scrollEnabledBeforeDrag ?? true; scrollEnabledBeforeDrag = nil
             draggingMarkerId = nil
             markerController.onUpdateInfoBubble(markerId)
             return true
         case .cancelled, .failed:
             let wasDragging = draggingMarkerId != nil
-            mapView.isScrollEnabled = true
+            mapView.isScrollEnabled = scrollEnabledBeforeDrag ?? true; scrollEnabledBeforeDrag = nil
             draggingMarkerId = nil
             return wasDragging
         default:
@@ -73,7 +77,7 @@ final class MapLibreMarkerEventController {
     }
 
     func unbind() {
-        mapView?.isScrollEnabled = true
+        mapView?.isScrollEnabled = scrollEnabledBeforeDrag ?? true; scrollEnabledBeforeDrag = nil
         mapView = nil
         draggingMarkerId = nil
     }
