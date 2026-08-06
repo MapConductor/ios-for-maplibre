@@ -11,8 +11,11 @@ final class MapLibreGroundImageController {
 
     private var groundImageSubscriptions: [String: AnyCancellable] = [:]
     private var groundImageStatesById: [String: GroundImageState] = [:]
-    private var latestStates: [GroundImageState] = []
-    private var isStyleLoaded: Bool = false
+    /// スタイル読み込み待ちの取り込み。捨てずに保留し、`onStyleLoaded` で流す。
+    /// 「なぜ待つ必要があるか」は `DeferredUntilReady` の説明にある。
+    private lazy var styleGate = DeferredUntilReady<[GroundImageState]> { [weak self] states in
+        self?.syncGroundImagesDirectly(states)
+    }
 
     init(mapView: MLNMapView?) {
         self.mapView = mapView
@@ -21,11 +24,8 @@ final class MapLibreGroundImageController {
     }
 
     func onStyleLoaded(_ style: MLNStyle) {
-        isStyleLoaded = true
         renderer.onStyleLoaded(style)
-        if !latestStates.isEmpty {
-            syncGroundImagesDirectly(latestStates)
-        }
+        styleGate.markReady()
     }
 
     func syncGroundImages(_ groundImages: [GroundImage]) {
@@ -60,7 +60,6 @@ final class MapLibreGroundImageController {
         }
 
         groundImageStatesById = newStatesById
-        latestStates = groundImages.map { $0.state }
 
         if oldIds != newIds {
             shouldSync = true
@@ -76,8 +75,10 @@ final class MapLibreGroundImageController {
             groundImageSubscriptions.removeValue(forKey: id)
         }
 
-        guard isStyleLoaded, shouldSync else { return }
-        syncGroundImagesDirectly(latestStates)
+        // 準備前は「適用せずに最新を覚える」だけ。準備後は変化があったときだけ流す。
+        if !styleGate.isReady || shouldSync {
+            styleGate.submit(groundImages.map { $0.state })
+        }
     }
 
     func handleTap(at coordinate: CLLocationCoordinate2D) -> Bool {
@@ -129,8 +130,8 @@ final class MapLibreGroundImageController {
             .sink { [weak self] _ in
                 guard let self else { return }
                 guard self.groundImageStatesById[state.id] != nil else { return }
-                guard self.isStyleLoaded else { return }
-                self.syncGroundImagesDirectly(self.latestStates)
+                guard self.styleGate.isReady, let latest = self.styleGate.latest else { return }
+                self.syncGroundImagesDirectly(latest)
             }
     }
 
@@ -142,8 +143,7 @@ final class MapLibreGroundImageController {
         groundImageSubscriptions.values.forEach { $0.cancel() }
         groundImageSubscriptions.removeAll()
         groundImageStatesById.removeAll()
-        latestStates.removeAll()
-        isStyleLoaded = false
+        styleGate.reset()
         renderer.unbind()
         mapView = nil
         groundImageManager.destroy()

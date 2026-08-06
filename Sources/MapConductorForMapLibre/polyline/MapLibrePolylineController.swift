@@ -1,16 +1,17 @@
-import Combine
 import CoreLocation
 import MapConductorCore
 import MapLibre
 
+/// ポリラインの状態を集めるのは `OverlayCollector`（`MapOverlayScope.polylineCollector`）で、
+/// `bindOverlayCollector` がここへ `add(data:)` / `update(state:)` を流す。
+/// コントローラは購読も差分も持たない。
+///
+/// 以前はここに `syncPolylines` という自前の差分ループがあったが、コレクタ移行で
+/// 呼び出し元が無くなっていた（`updateContent` はコレクタに `sync` する）。
+/// `latestStates` / `isStyleLoaded` / 個別購読もその名残だったので落とした。
 @MainActor
 final class MapLibrePolylineController: PolylineController<[MLNPolylineFeature], MapLibrePolylineOverlayRenderer> {
     private weak var mapView: MLNMapView?
-
-    private var polylineSubscriptions: [String: AnyCancellable] = [:]
-    private var polylineStatesById: [String: PolylineState] = [:]
-    private var latestStates: [PolylineState] = []
-    private var isStyleLoaded: Bool = false
 
     init(mapView: MLNMapView?) {
         self.mapView = mapView
@@ -29,59 +30,13 @@ final class MapLibrePolylineController: PolylineController<[MLNPolylineFeature],
         super.init(polylineManager: polylineManager, renderer: renderer)
     }
 
+    /// スタイルが載るたびに呼ばれる。捨てられたソース／レイヤを作り直してから、
+    /// **マネージャ**を元に描き直す（`onPostProcess` が `allEntities()` を読む）。
+    /// マップ側の `polylineCollector.flush()` も同じ集合を流し直すが、`add` は冪等。
     func onStyleLoaded(_ style: MLNStyle) {
-        isStyleLoaded = true
         renderer.onStyleLoaded(style)
-        if !latestStates.isEmpty {
-            Task { [weak self] in
-                guard let self else { return }
-                await self.add(data: self.latestStates)
-            }
-        }
-    }
-
-    func syncPolylines(_ polylines: [Polyline]) {
-        let newIds = Set(polylines.map { $0.id })
-        let oldIds = Set(polylineStatesById.keys)
-
-        var newStatesById: [String: PolylineState] = [:]
-        var shouldSyncList = false
-
-        for polyline in polylines {
-            let state = polyline.state
-            if let existingState = polylineStatesById[state.id], existingState !== state {
-                polylineSubscriptions[state.id]?.cancel()
-                polylineSubscriptions.removeValue(forKey: state.id)
-                shouldSyncList = true
-            }
-            newStatesById[state.id] = state
-            if !polylineManager.hasEntity(state.id) {
-                shouldSyncList = true
-            }
-        }
-
-        polylineStatesById = newStatesById
-        latestStates = polylines.map { $0.state }
-
-        if oldIds != newIds {
-            shouldSyncList = true
-        }
-
-        if isStyleLoaded, shouldSyncList {
-            Task { [weak self] in
-                guard let self else { return }
-                await self.add(data: self.latestStates)
-            }
-        }
-
-        for polyline in polylines {
-            subscribeToPolyline(polyline.state)
-        }
-
-        let removedIds = oldIds.subtracting(newIds)
-        for id in removedIds {
-            polylineSubscriptions[id]?.cancel()
-            polylineSubscriptions.removeValue(forKey: id)
+        Task { [weak self] in
+            await self?.renderer.onPostProcess()
         }
     }
 
@@ -93,26 +48,7 @@ final class MapLibrePolylineController: PolylineController<[MLNPolylineFeature],
         return true
     }
 
-    private func subscribeToPolyline(_ state: PolylineState) {
-        guard polylineSubscriptions[state.id] == nil else { return }
-        polylineSubscriptions[state.id] = state.asFlow()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                guard self.polylineStatesById[state.id] != nil else { return }
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.update(state: state)
-                }
-            }
-    }
-
     func unbind() {
-        polylineSubscriptions.values.forEach { $0.cancel() }
-        polylineSubscriptions.removeAll()
-        polylineStatesById.removeAll()
-        latestStates.removeAll()
-        isStyleLoaded = false
         renderer.unbind()
         mapView = nil
         destroy()

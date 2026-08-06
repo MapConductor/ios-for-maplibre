@@ -1,46 +1,19 @@
-import Combine
 import MapConductorCore
 import MapLibre
-
-private final class MapLibreRasterNetworkDelegate: NSObject, MLNNetworkConfigurationDelegate {
-    private let lock = NSLock()
-    private var userAgent: String?
-    private var extraHeaders: [String: String] = [:]
-
-    func update(userAgent: String?, extraHeaders: [String: String]) {
-        lock.lock()
-        defer { lock.unlock() }
-        self.userAgent = userAgent
-        self.extraHeaders = extraHeaders
-    }
-
-    func willSend(_ request: NSMutableURLRequest) -> NSMutableURLRequest {
-        lock.lock()
-        let ua = userAgent
-        let headers = extraHeaders
-        lock.unlock()
-
-        if let ua, !ua.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
-            request.setValue(ua, forHTTPHeaderField: "User-Agent")
-        }
-        for (key, value) in headers {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
-        return request
-    }
-}
 
 @MainActor
 final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterLayer, MapLibreRasterLayerOverlayRenderer> {
     private weak var mapView: MLNMapView?
-
-    private var rasterSubscriptions: [String: AnyCancellable] = [:]
-    private var rasterStatesById: [String: RasterLayerState] = [:]
-    private var latestStates: [RasterLayerState] = []
-    private var isStyleLoaded: Bool = false
     private weak var loadedStyle: MLNStyle?
-    private var pendingUpdate: Task<Void, Never>?
-    private let networkDelegate = MapLibreRasterNetworkDelegate()
+
+    /// スタイルが載るまでレイヤ追加を保留する門。
+    ///
+    /// スタイルを差し替えると、ランタイムに足したソースとレイヤはすべて捨てられる。
+    /// `MapViewScope` のコレクタは**メンバーシップが変わったときにしか**流してこないので、
+    /// 作り直すには最後の一式を覚えておく必要がある。門が `latest` として持っている。
+    private lazy var styleGate = DeferredUntilReady<[RasterLayerState]> { [weak self] states in
+        Task { [weak self] in await self?.applyToRenderer(states) }
+    }
 
     init(mapView: MLNMapView?) {
         self.mapView = mapView
@@ -52,196 +25,54 @@ final class MapLibreRasterLayerController: RasterLayerController<MapLibreRasterL
     func onStyleLoaded(_ style: MLNStyle) {
         let styleChanged = loadedStyle !== style
         loadedStyle = style
-        isStyleLoaded = true
         renderer.onStyleLoaded(style)
 
-        // A new MLNStyle does not contain handles registered against the old
-        // style. Forget those handles so every desired raster layer is rebuilt.
+        // 新しい MLNStyle は古いスタイルに登録したハンドルを持たない。
+        // 覚えているハンドルを捨てて、全レイヤを作り直させる。
         if styleChanged {
             rasterLayerManager.clear()
         }
 
-        // Add initial layers if they were set before style loaded
-        if !latestStates.isEmpty {
-            applyNetworkConfiguration(latestStates)
-            syncLayersDirectly(latestStates)
-        }
+        styleGate.markReady()
     }
 
-    func syncRasterLayers(_ layers: [RasterLayer]) {
-        let newIds = Set(layers.map { $0.id })
-        let oldIds = Set(rasterStatesById.keys)
-
-        var newStatesById: [String: RasterLayerState] = [:]
-        var shouldSync = false
-
-        for layer in layers {
-            let state = layer.state
-            if let existingState = rasterStatesById[state.id], existingState !== state {
-                rasterSubscriptions[state.id]?.cancel()
-                rasterSubscriptions.removeValue(forKey: state.id)
-                shouldSync = true
-            }
-            newStatesById[state.id] = state
-            if !rasterLayerManager.hasEntity(state.id) {
-                shouldSync = true
-            }
-        }
-
-        // Check if properties changed
-        if !shouldSync {
-            for (id, newState) in newStatesById {
-                if let entity = rasterLayerManager.getEntity(id) {
-                    if entity.fingerPrint != newState.fingerPrint() {
-                        shouldSync = true
-                        break
-                    }
-                }
-            }
-        }
-
-        rasterStatesById = newStatesById
-        latestStates = layers.map { $0.state }
-
-        if oldIds != newIds {
-            shouldSync = true
-        }
-
-        for layer in layers {
-            subscribeToRasterLayer(layer.state)
-        }
-
-        let removedIds = oldIds.subtracting(newIds)
-        for id in removedIds {
-            rasterSubscriptions[id]?.cancel()
-            rasterSubscriptions.removeValue(forKey: id)
-        }
-
-        guard isStyleLoaded, shouldSync else { return }
-
-        // Perform synchronous update directly on main thread
-        // Bypass async/await entirely to avoid object lifetime issues
-        let states = layers.map { $0.state }
-        applyNetworkConfiguration(states)
-        syncLayersDirectly(states)
+    /// ヘッダはレイヤを足す**前に**登録する。あとからだと最初のタイル要求が
+    /// ヘッダ無しで飛び、認証が要るサーバでは初回だけ 401 になる。
+    override func add(data: [RasterLayerState]) async {
+        MapLibreRasterHeaderInjector.shared.apply(states: data, owner: self)
+        styleGate.submit(data)
     }
 
-    private func applyNetworkConfiguration(_ states: [RasterLayerState]) {
-        var requestedUserAgents = Set<String>()
-        var requestedHeadersList: [[String: String]] = []
-
-        for state in states {
-            if let ua = state.userAgent?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines), !ua.isEmpty {
-                requestedUserAgents.insert(ua)
-            }
-            if let headers = state.extraHeaders, !headers.isEmpty {
-                requestedHeadersList.append(headers)
-            }
-        }
-
-        let userAgent: String?
-        if requestedUserAgents.isEmpty {
-            userAgent = nil
-        } else if requestedUserAgents.count == 1 {
-            userAgent = requestedUserAgents.first
-        } else {
-            NSLog("[MapConductor] MapLibre RasterLayer: multiple different userAgent values are not supported; using an arbitrary one.")
-            userAgent = requestedUserAgents.first
-        }
-
-        var mergedHeaders: [String: String] = [:]
-        if !requestedHeadersList.isEmpty {
-            // MapLibre iOS only supports global request mutation; if multiple layers specify headers and they
-            // conflict, last-writer wins here.
-            var hadConflicts = false
-            for headers in requestedHeadersList {
-                for (k, v) in headers {
-                    if let existing = mergedHeaders[k], existing != v { hadConflicts = true }
-                    mergedHeaders[k] = v
-                }
-            }
-            if hadConflicts {
-                NSLog("[MapConductor] MapLibre RasterLayer: conflicting extraHeaders detected; MapLibre iOS applies headers globally, so some requests may use incorrect headers.")
-            }
-        }
-
-        if userAgent == nil && mergedHeaders.isEmpty {
-            // Restore default behavior.
-            MLNNetworkConfiguration.sharedManager.delegate = nil
-            return
-        }
-
-        networkDelegate.update(userAgent: userAgent, extraHeaders: mergedHeaders)
-        MLNNetworkConfiguration.sharedManager.delegate = networkDelegate
+    override func update(state: RasterLayerState) async {
+        let merged = (styleGate.latest ?? []).map { $0.id == state.id ? state : $0 }
+        MapLibreRasterHeaderInjector.shared.apply(states: merged, owner: self)
+        styleGate.submit(merged)
+        guard styleGate.isReady else { return }
+        await super.update(state: state)
     }
 
-    private func syncLayersDirectly(_ states: [RasterLayerState]) {
-        let previous = Set(rasterLayerManager.allEntities().map { $0.state.id })
-        let newIds = Set(states.map { $0.id })
-
-        // Remove layers that are no longer in the list
-        for id in previous.subtracting(newIds) {
-            if let entity = rasterLayerManager.getEntity(id) {
-                renderer.removeLayerSync(entity: entity)
-                _ = rasterLayerManager.removeEntity(id)
-            }
-        }
-
-        // Add or update layers
-        for state in states {
-            if let prevEntity = rasterLayerManager.getEntity(state.id) {
-                // Update existing layer
-                if prevEntity.fingerPrint != state.fingerPrint() {
-                    if let updatedLayer = renderer.updateLayerSync(
-                        layer: prevEntity.layer!,
-                        current: RasterLayerEntity(layer: prevEntity.layer, state: state),
-                        prev: prevEntity
-                    ) {
-                        let entity = RasterLayerEntity(layer: updatedLayer, state: state)
-                        rasterLayerManager.registerEntity(entity)
-                    }
-                }
-            } else {
-                // Add new layer
-                if let newLayer = renderer.createLayerSync(state: state) {
-                    let entity = RasterLayerEntity(layer: newLayer, state: state)
-                    rasterLayerManager.registerEntity(entity)
-                }
-            }
-        }
+    override func clear() async {
+        MapLibreRasterHeaderInjector.shared.remove(owner: self)
+        styleGate.submit([])
+        await super.clear()
     }
 
-    // Override to prevent async calls from camera changes
+    // カメラ変更で非同期処理を起こさない。ラスタレイヤはカメラに追従する必要がない。
     override func onCameraChanged(mapCameraPosition: MapCameraPosition) async {
-        // Raster layers don't need to respond to camera changes
-        // Empty implementation prevents async Task creation
-    }
-
-    private func subscribeToRasterLayer(_ state: RasterLayerState) {
-        guard rasterSubscriptions[state.id] == nil else { return }
-        rasterSubscriptions[state.id] = state.asFlow()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                guard self.rasterStatesById[state.id] != nil else { return }
-                guard self.isStyleLoaded else { return }
-                self.applyNetworkConfiguration(self.latestStates)
-                self.syncLayersDirectly(self.latestStates)
-            }
     }
 
     func unbind() {
-        pendingUpdate?.cancel()
-        pendingUpdate = nil
-        rasterSubscriptions.values.forEach { $0.cancel() }
-        rasterSubscriptions.removeAll()
-        rasterStatesById.removeAll()
-        latestStates.removeAll()
-        isStyleLoaded = false
+        MapLibreRasterHeaderInjector.shared.remove(owner: self)
+        styleGate.reset()
         loadedStyle = nil
-        MLNNetworkConfiguration.sharedManager.delegate = nil
         renderer.unbind()
         mapView = nil
         destroy()
+    }
+
+    /// `super.add` はクロージャから直接呼べない（escaping クロージャで `super` を
+    /// 捕まえられない）ので、門からはこのメソッド経由で入る。
+    private func applyToRenderer(_ states: [RasterLayerState]) async {
+        await super.add(data: states)
     }
 }

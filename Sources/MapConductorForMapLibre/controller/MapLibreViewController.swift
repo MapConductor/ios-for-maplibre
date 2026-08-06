@@ -8,6 +8,11 @@ final class MapLibreViewController: MapViewControllerProtocol {
     let holder: AnyMapViewHolder
     let typedHolder: MapLibreMapViewHolder
     let coroutine = CoroutineScope()
+
+    /// この地図に紐づくオーバーレイコントローラの登録簿。
+    /// 拡張モジュール（ヒートマップ、マーカークラスタリング等）がここに登録して
+    /// カメラ変更を受け取る。`MapViewControllerProtocol` の要件。
+    let overlayControllers = OverlayControllerRegistry()
     private weak var mapView: MLNMapView?
     private var cameraAnimator: CameraAnimator?
     private(set) var lastLogicalTilt: Double? = nil
@@ -184,6 +189,8 @@ final class MapLibreViewController: MapViewControllerProtocol {
     }
 
     func notifyCameraMoveEnd(_ cameraPosition: MapCameraPosition) {
+        // 登録済みオーバーレイ（拡張モジュール含む）へ伝播する。
+        overlayControllers.dispatchCameraChanged(cameraPosition)
         cameraMoveEndListener?(cameraPosition)
     }
 
@@ -292,4 +299,16 @@ private final class CameraAnimator {
         guard t > 0 && t < 1 else { return t }
         return t * t * (3 - 2 * t)
     }
+
+    /// ジェスチャの ON/OFF を地図へ適用する。
+    /// android-sdk の `applyUISettings(settings:)` と同じ位置づけ。
+    /// 初回適用はビュー生成時（`makeUIView`）に行い、以降の変更がここを通る。
+    func applyUISettings(_ settings: MapUISettings) {
+        guard let mapView else { return }
+        mapView.isScrollEnabled = settings.scrollGesture
+        mapView.isZoomEnabled = settings.zoomGesture
+        mapView.isRotateEnabled = settings.rotateGesture
+        mapView.isPitchEnabled = settings.tiltGesture
+    }
+
 }
