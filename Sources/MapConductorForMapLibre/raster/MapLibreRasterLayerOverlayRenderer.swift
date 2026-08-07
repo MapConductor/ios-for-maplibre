@@ -145,7 +145,7 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
         removeLayerSync(entity: entity)
     }
 
-    private func makeTileSource(id: String, source: RasterSource) -> MLNRasterTileSource {
+    private func makeTileSource(id: String, source: RasterLayerSource) -> MLNRasterTileSource {
         switch source {
         case let .urlTemplate(template, tileSize, minZoom, maxZoom, _, scheme):
             var options: [MLNTileSourceOption: Any] = [
@@ -175,7 +175,7 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
             let base = serviceUrl.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let template = "\(base)/tile/{z}/{y}/{x}"
             var options: [MLNTileSourceOption: Any] = [
-                .tileSize: NSNumber(value: RasterSource.defaultTileSize),
+                .tileSize: NSNumber(value: RasterLayerSource.defaultTileSize),
                 .tileCoordinateSystem: NSNumber(value: MLNTileCoordinateSystem.XYZ.rawValue),
             ]
             return MLNRasterTileSource(identifier: id, tileURLTemplates: [template], options: options)
