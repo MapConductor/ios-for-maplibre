@@ -2,30 +2,21 @@ import Combine
 import Foundation
 import MapConductorCore
 
+/// MapLibre の state。
+///
+/// カメラの保持と委譲、`uiSettings`、`id` はコアの ``MapViewState`` が持つ。
+/// ここに残るのは **MapLibre 固有のもの**だけ:
+///  - `mapDesignType`（プロバイダ固有の型）
+///  - プロバイダ型のホルダーと、それを返す `getMapViewHolder()` の絞り込み
 public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
-    private let stateId: String
-
-    @Published private var _cameraPosition: MapCameraPosition
     @Published private var _mapDesignType: MapLibreMapDesignType
-    @Published private var _uiSettings: MapUISettings
-
-    private var controller: (any MapViewControllerProtocol)?
 
     /// Provider-typed holder: `map`/`mapView` are `MLNMapView`, no cast needed.
     public private(set) var mapViewHolder: MapLibreMapViewHolder?
 
-    public override var id: String { stateId }
-
-    public override var cameraPosition: MapCameraPosition { _cameraPosition }
-
     public override var mapDesignType: MapLibreMapDesignType {
         get { _mapDesignType }
         set { _mapDesignType = newValue }
-    }
-
-    public override var uiSettings: MapUISettings {
-        get { _uiSettings }
-        set { _uiSettings = newValue }
     }
 
     public init(
@@ -34,11 +25,8 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
         cameraPosition: MapCameraPosition = .Default,
         uiSettings: MapUISettings = MapUISettings()
     ) {
-        self.stateId = id
         self._mapDesignType = mapDesignType
-        self._cameraPosition = cameraPosition
-        self._uiSettings = uiSettings
-        super.init()
+        super.init(id: id, initialCameraPosition: cameraPosition, uiSettings: uiSettings)
     }
 
     public convenience init(
@@ -49,37 +37,13 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
         self.init(id: UUID().uuidString, mapDesignType: mapDesignType, cameraPosition: cameraPosition, uiSettings: uiSettings)
     }
 
-    public override func moveCameraTo(cameraPosition: MapCameraPosition, durationMillis: Long? = 0) {
-        let resolved = resolveCameraPosition(cameraPosition)
-        if let controller = controller {
-            if let durationMillis, durationMillis > 0 {
-                controller.animateCamera(position: resolved, duration: durationMillis)
-            } else {
-                controller.moveCamera(position: resolved)
-            }
-        } else {
-            _cameraPosition = resolved
-        }
-    }
-
-    public override func fitBounds(bounds: GeoRectBounds, padding: Int) {
-        controller?.fitBounds(bounds: bounds, padding: padding)
-    }
-
-    public override func moveCameraTo(position: GeoPoint, durationMillis: Long? = 0) {
-        let updated = cameraPosition.copy(position: position)
-        moveCameraTo(cameraPosition: updated, durationMillis: durationMillis)
-    }
-
+    /// アプリが `state.getMapViewHolder()?.map` で `MLNMapView` を取れる形を保つための絞り込み。
     public override func getMapViewHolder() -> AnyMapViewHolder? {
         mapViewHolder.map { AnyMapViewHolder($0) }
     }
 
     func setController(_ controller: (any MapViewControllerProtocol)?) {
-        self.controller = controller
-        if let controller = controller {
-            controller.moveCamera(position: cameraPosition)
-        }
+        attachController(controller)
     }
 
     func setMapViewHolder(_ holder: MapLibreMapViewHolder?) {
@@ -87,16 +51,6 @@ public final class MapLibreViewState: MapViewState<MapLibreMapDesignType> {
     }
 
     func updateCameraPosition(_ cameraPosition: MapCameraPosition) {
-        DispatchQueue.main.async { [weak self] in
-            self?._cameraPosition = cameraPosition
-        }
-    }
-
-    private func resolveCameraPosition(_ target: MapCameraPosition) -> MapCameraPosition {
-        let isUnspecified = target.zoom == 0.0 && target.bearing == 0.0 && target.tilt == 0.0
-        if isUnspecified {
-            return cameraPosition.copy(position: target.position)
-        }
-        return target
+        setCameraPositionInternal(cameraPosition)
     }
 }

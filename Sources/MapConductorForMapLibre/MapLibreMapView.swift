@@ -500,12 +500,15 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                     altitude: 0
                 )
             )
+            // 4 隅の逆投影は全プロバイダ共通なのでコアの buildVisibleRegion を使う。
+            // bounds だけはネイティブの visibleCoordinateBounds の方が正確なので差し替える。
+            let corners = MapLibreMapViewHolder(mapView: mapView).buildVisibleRegion()
             let visibleRegion = VisibleRegion(
                 bounds: bounds,
-                nearLeft: geoPoint(at: CGPoint(x: 0, y: mapView.bounds.maxY), mapView: mapView),
-                nearRight: geoPoint(at: CGPoint(x: mapView.bounds.maxX, y: mapView.bounds.maxY), mapView: mapView),
-                farLeft: geoPoint(at: CGPoint(x: 0, y: 0), mapView: mapView),
-                farRight: geoPoint(at: CGPoint(x: mapView.bounds.maxX, y: 0), mapView: mapView)
+                nearLeft: corners?.nearLeft,
+                nearRight: corners?.nearRight,
+                farLeft: corners?.farLeft,
+                farRight: corners?.farRight
             )
             return mapView.toMapCameraPosition(
                 logicalTiltHint: controller?.lastLogicalTilt,
