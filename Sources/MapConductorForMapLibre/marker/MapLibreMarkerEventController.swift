@@ -53,27 +53,29 @@ private final class MLNMarkerDragSurface: MarkerDragSurface {
 /// MapLibreMarkerController をコアの ``MarkerEventHostProtocol`` に適合させる。
 @MainActor
 private final class MapLibreMarkerEventHost: MarkerEventHostProtocol {
-    private let markerController: MapLibreMarkerController
+    /// **weak で持つこと。** MapLibreMarkerController が eventController を強参照しており、
+    /// ここを強参照にすると循環して地図を閉じても解放されない。
+    private weak var markerController: MapLibreMarkerController?
 
     init(markerController: MapLibreMarkerController) { self.markerController = markerController }
 
     func markerId(atScreenPoint point: CGPoint) -> String? {
-        markerController.renderer.markerId(at: point)
+        markerController?.renderer.markerId(at: point)
     }
 
     func markerState(for id: String) -> MarkerState? {
-        markerController.getMarkerState(for: id)
+        markerController?.getMarkerState(for: id)
     }
 
     func handleTiledMarkerTap(atScreenPoint point: CGPoint) -> Bool {
-        markerController.handleTiledMarkerTap(at: point)
+        markerController?.handleTiledMarkerTap(at: point) ?? false
     }
 
-    func dispatchClick(state: MarkerState) { markerController.dispatchClick(state: state) }
-    func dispatchDragStart(state: MarkerState) { markerController.dispatchDragStart(state: state) }
-    func dispatchDrag(state: MarkerState) { markerController.dispatchDrag(state: state) }
-    func dispatchDragEnd(state: MarkerState) { markerController.dispatchDragEnd(state: state) }
-    func onUpdateInfoBubble(_ markerId: String) { markerController.onUpdateInfoBubble(markerId) }
+    func dispatchClick(state: MarkerState) { markerController?.dispatchClick(state: state) }
+    func dispatchDragStart(state: MarkerState) { markerController?.dispatchDragStart(state: state) }
+    func dispatchDrag(state: MarkerState) { markerController?.dispatchDrag(state: state) }
+    func dispatchDragEnd(state: MarkerState) { markerController?.dispatchDragEnd(state: state) }
+    func onUpdateInfoBubble(_ markerId: String) { markerController?.onUpdateInfoBubble(markerId) }
 }
 
 private extension MarkerDragGestureState {
