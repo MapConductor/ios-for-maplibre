@@ -4,81 +4,86 @@ import MapConductorCore
 import MapLibre
 import UIKit
 
+/// MapLibre のマーカーイベント。
+///
+/// タップの引き当て・ドラッグの状態遷移・パン抑止はすべてコアの
+/// ``DefaultMarkerEventController`` が持つ。ここに残るのは
+/// **MapLibre 固有の面の橋渡し**だけ。
+///
+/// 移行前はこのファイルが 84 行あり、ios-for-maplibre と ios-for-maptiler で
+/// **import 文以外 1 文字も違わなかった**。
 @MainActor
-final class MapLibreMarkerEventController {
+final class MapLibreMarkerEventController: DefaultMarkerEventController {
+    init(mapView: MLNMapView?, markerController: MapLibreMarkerController) {
+        super.init(
+            surface: mapView.map { MLNMarkerDragSurface(mapView: $0) },
+            host: MapLibreMarkerEventHost(markerController: markerController)
+        )
+    }
+
+    /// UIKit のジェスチャをコアの状態へ写す。
+    func handleLongPress(_ recognizer: UILongPressGestureRecognizer) -> Bool {
+        guard let view = recognizer.view else { return false }
+        return handleLongPress(
+            state: MarkerDragGestureState(recognizer.state),
+            at: recognizer.location(in: view)
+        )
+    }
+}
+
+/// `MLNMapView` をコアの ``MarkerDragSurface`` に適合させる。
+@MainActor
+private final class MLNMarkerDragSurface: MarkerDragSurface {
     private weak var mapView: MLNMapView?
+
+    init(mapView: MLNMapView) { self.mapView = mapView }
+
+    var isScrollEnabled: Bool {
+        get { mapView?.isScrollEnabled ?? true }
+        set { mapView?.isScrollEnabled = newValue }
+    }
+
+    func geoPoint(atScreenPoint point: CGPoint) -> GeoPoint? {
+        guard let mapView else { return nil }
+        let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
+        return GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+    }
+}
+
+/// MapLibreMarkerController をコアの ``MarkerEventHostProtocol`` に適合させる。
+@MainActor
+private final class MapLibreMarkerEventHost: MarkerEventHostProtocol {
     private let markerController: MapLibreMarkerController
 
-    private var draggingMarkerId: String?
-    /// Panning is suppressed while a marker is dragged; remember what it was so
-    /// an app that set `uiSettings.scrollGesture = false` keeps that setting.
-    private var scrollEnabledBeforeDrag: Bool?
+    init(markerController: MapLibreMarkerController) { self.markerController = markerController }
 
-    init(mapView: MLNMapView?, markerController: MapLibreMarkerController) {
-        self.mapView = mapView
-        self.markerController = markerController
+    func markerId(atScreenPoint point: CGPoint) -> String? {
+        markerController.renderer.markerId(at: point)
     }
 
-    func handleTap(at point: CGPoint) -> Bool {
-        // Check native symbol markers first.
-        if let markerId = markerController.renderer.markerId(at: point),
-           let state = markerController.getMarkerState(for: markerId),
-           state.clickable {
-            markerController.dispatchClick(state: state)
-            return true
+    func markerState(for id: String) -> MarkerState? {
+        markerController.getMarkerState(for: id)
+    }
+
+    func handleTiledMarkerTap(atScreenPoint point: CGPoint) -> Bool {
+        markerController.handleTiledMarkerTap(at: point)
+    }
+
+    func dispatchClick(state: MarkerState) { markerController.dispatchClick(state: state) }
+    func dispatchDragStart(state: MarkerState) { markerController.dispatchDragStart(state: state) }
+    func dispatchDrag(state: MarkerState) { markerController.dispatchDrag(state: state) }
+    func dispatchDragEnd(state: MarkerState) { markerController.dispatchDragEnd(state: state) }
+    func onUpdateInfoBubble(_ markerId: String) { markerController.onUpdateInfoBubble(markerId) }
+}
+
+private extension MarkerDragGestureState {
+    init(_ state: UIGestureRecognizer.State) {
+        switch state {
+        case .began: self = .began
+        case .changed: self = .changed
+        case .ended: self = .ended
+        case .cancelled, .failed: self = .cancelled
+        default: self = .other
         }
-        // Fall back to geographic proximity search for tile-rendered markers.
-        return markerController.handleTiledMarkerTap(at: point)
-    }
-
-    func handleLongPress(_ recognizer: UILongPressGestureRecognizer) -> Bool {
-        guard let mapView else { return false }
-        let point = recognizer.location(in: mapView)
-
-        switch recognizer.state {
-        case .began:
-            guard let markerId = markerController.renderer.markerId(at: point),
-                  let state = markerController.getMarkerState(for: markerId),
-                  state.draggable else { return false }
-            draggingMarkerId = markerId
-            scrollEnabledBeforeDrag = mapView.isScrollEnabled
-            mapView.isScrollEnabled = false
-            markerController.dispatchDragStart(state: state)
-            markerController.onUpdateInfoBubble(markerId)
-            return true
-        case .changed:
-            guard let markerId = draggingMarkerId,
-                  let state = markerController.getMarkerState(for: markerId) else { return false }
-            let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
-            state.position = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
-            markerController.dispatchDrag(state: state)
-            markerController.onUpdateInfoBubble(markerId)
-            return true
-        case .ended:
-            guard let markerId = draggingMarkerId,
-                  let state = markerController.getMarkerState(for: markerId) else {
-                mapView.isScrollEnabled = scrollEnabledBeforeDrag ?? true; scrollEnabledBeforeDrag = nil
-                draggingMarkerId = nil
-                return false
-            }
-            markerController.dispatchDragEnd(state: state)
-            mapView.isScrollEnabled = scrollEnabledBeforeDrag ?? true; scrollEnabledBeforeDrag = nil
-            draggingMarkerId = nil
-            markerController.onUpdateInfoBubble(markerId)
-            return true
-        case .cancelled, .failed:
-            let wasDragging = draggingMarkerId != nil
-            mapView.isScrollEnabled = scrollEnabledBeforeDrag ?? true; scrollEnabledBeforeDrag = nil
-            draggingMarkerId = nil
-            return wasDragging
-        default:
-            return draggingMarkerId != nil
-        }
-    }
-
-    func unbind() {
-        mapView?.isScrollEnabled = scrollEnabledBeforeDrag ?? true; scrollEnabledBeforeDrag = nil
-        mapView = nil
-        draggingMarkerId = nil
     }
 }
