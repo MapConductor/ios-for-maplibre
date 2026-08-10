@@ -259,6 +259,7 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                     let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
                     return mapView.convert(coordinate, toPointTo: mapView)
                 },
+                projectionGate: screenProjectionGate(feature: "InfoBubble"),
                 resolveMarkerStateForIcon: { [weak markerController] id, bubbleMarker in
                     markerController?.getMarkerState(for: id) ?? bubbleMarker
                 },
@@ -277,7 +278,8 @@ private struct MapLibreMapViewRepresentable: UIViewRepresentable {
                     let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
                     let p = mapView.convert(coordinate, toPointTo: mapView)
                     return (p.x.isFinite && p.y.isFinite) ? p : nil
-                }
+                },
+                projectionGate: screenProjectionGate(feature: "marker animation overlay")
             )
         }
 

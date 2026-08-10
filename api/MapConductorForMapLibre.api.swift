@@ -65,7 +65,6 @@ final public class MapLibreViewState : MapConductorCore.MapViewState<MapConducto
   final public let mapView: MapLibre.MLNMapView
   final public let map: MapLibre.MLNMapView
   final public func toScreenOffset(position: any MapConductorCore.GeoPointProtocol) -> CoreFoundation.CGPoint?
-  final public func fromScreenOffset(offset: CoreFoundation.CGPoint) async -> MapConductorCore.GeoPoint?
   final public func fromScreenOffsetSync(offset: CoreFoundation.CGPoint) -> MapConductorCore.GeoPoint?
   public typealias ActualMap = MapLibre.MLNMapView
   public typealias ActualMapView = MapLibre.MLNMapView
