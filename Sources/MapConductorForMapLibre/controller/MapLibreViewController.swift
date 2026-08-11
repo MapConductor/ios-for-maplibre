@@ -109,18 +109,31 @@ final class MapLibreViewController: MapViewControllerProtocol {
         lastLogicalTilt = position.tilt
         let cameraState = position.toMapLibreCameraState()
 
-        // Set zoom/center/bearing first, then apply pitch via setCamera.
+        // ★ pitch を先に、zoom を後に当てる。順序を逆にすると**傾けるたびに地図が遠ざかる**。
+        //
+        // `MLNMapCamera` が持っているのは真下方向の距離 `altitude` で、実際の縮尺を決めるのは
+        // 視点までの距離 `viewingDistance = altitude / cos(pitch)` のほう（ヘッダに
+        // 「altitude を書くと pitch から viewingDistance が計算し直される」と書いてある）。
+        // `mapView.camera` は pitch 0 のときの altitude を持っているので、pitch だけ書き換えると
+        // altitude が据え置かれ、viewingDistance が 1/cos(pitch) 倍に伸びる ＝ ズームが下がる。
+        //
+        // android は `CameraPosition(target, zoom, tilt, bearing)` を 1 つ渡すので zoom が守られる。
+        // iOS も pitch を当ててから `setCenter(zoomLevel:)` で zoom を入れ直せば同じになる
+        // （`setCenter` は pitch を触らない）。
+        //
         // Note: MLNMapView.camera is a copy; mutating mapView.camera.pitch does not affect the map.
+        let camera = mapView.camera
+        camera.centerCoordinate = cameraState.center
+        camera.heading = cameraState.bearing
+        camera.pitch = cameraState.tilt
+        mapView.setCamera(camera, animated: false)
+
         mapView.setCenter(
             cameraState.center,
             zoomLevel: cameraState.zoom,
             direction: cameraState.bearing,
             animated: false
         )
-
-        let camera = mapView.camera
-        camera.pitch = cameraState.tilt
-        mapView.setCamera(camera, animated: false)
     }
 
     func animateCamera(position: MapCameraPosition, duration: Long) {
@@ -265,16 +278,19 @@ private final class CameraAnimator {
             tilt: tilt
         )
         let cameraState = currentPos.toMapLibreCameraState()
+        // pitch を先に、zoom を後に。逆にすると傾けるたびに地図が遠ざかる
+        // （理由は `MapLibreViewController.moveCamera` のコメント）。
+        let camera = mapView.camera
+        camera.centerCoordinate = cameraState.center
+        camera.heading = cameraState.bearing
+        camera.pitch = cameraState.tilt
+        mapView.setCamera(camera, animated: false)
         mapView.setCenter(
             cameraState.center,
             zoomLevel: cameraState.zoom,
             direction: cameraState.bearing,
             animated: false
         )
-        let camera = mapView.camera
-        camera.heading = cameraState.bearing
-        camera.pitch = cameraState.tilt
-        mapView.setCamera(camera, animated: false)
 
         if t >= 1.0 {
             stop()
