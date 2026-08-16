@@ -17,10 +17,6 @@ public final class MapLibreMapViewHolder: MapViewHolderProtocol {
         return mapView.convert(coordinate, toPointTo: mapView)
     }
 
-    public func fromScreenOffset(offset: CGPoint) async -> GeoPoint? {
-        fromScreenOffsetSync(offset: offset)
-    }
-
     public func fromScreenOffsetSync(offset: CGPoint) -> GeoPoint? {
         let coordinate = mapView.convert(offset, toCoordinateFrom: mapView)
         return GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
