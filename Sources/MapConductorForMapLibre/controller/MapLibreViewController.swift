@@ -1,6 +1,7 @@
 import CoreLocation
 import MapLibre
-import MapConductorCore
+// FlyToZoomArc はドライバー実装点なので @_spi 越しに取る。
+@_spi(MapConductorDriver) import MapConductorCore
 import QuartzCore
 import UIKit
 
@@ -225,7 +226,10 @@ private final class CameraAnimator {
     private let from: MapCameraPosition
     private let to: MapCameraPosition
     private let duration: TimeInterval
-    private let zoomArcAmplitude: Double
+    /// 中心とズームの補間。van Wijk（＝ android-for-maplibre の
+    /// `map.animateCamera` が落ちる `NativeMap.flyTo` と同じ式）。
+    /// ``FlyToZoomArc`` の説明を読むこと。
+    private let arc: FlyToZoomArc
     private var displayLink: CADisplayLink?
     private let startTime: CFTimeInterval
 
@@ -233,15 +237,17 @@ private final class CameraAnimator {
         mapView: MLNMapView,
         from: MapCameraPosition,
         to: MapCameraPosition,
-        duration: TimeInterval,
-        zoomArcAmplitude: Double = 2.5
+        duration: TimeInterval
     ) {
         self.mapView = mapView
         self.from = from
         self.to = to
         self.duration = max(duration, 0.01)
-        self.zoomArcAmplitude = zoomArcAmplitude
         self.startTime = CACurrentMediaTime()
+
+        let bounds = mapView.bounds
+        let viewport = max(Double(max(bounds.width, bounds.height)), 1.0)
+        self.arc = FlyToZoomArc(from: from, to: to, viewportSizePixels: viewport)
     }
 
     func start() {
@@ -265,9 +271,13 @@ private final class CameraAnimator {
         let linear = min(1.0, elapsed / duration)
         let t = easeInOut(linear)
 
-        let latitude = lerp(from.position.latitude, to.position.latitude, t)
-        let longitude = lerp(from.position.longitude, to.position.longitude, t)
-        let zoom = lerp(from.zoom, to.zoom, t) + zoomArc(t)
+        // 中心とズームは van Wijk が決める。**`t` で素朴に補間しないこと**
+        // （中心は等速でもズームだけ弧を描く、という組み合わせは移動が破綻して見える）。
+        let centerT = arc.centerFraction(at: t)
+        let latitude = lerp(from.position.latitude, to.position.latitude, centerT)
+        let longitude = lerp(from.position.longitude, to.position.longitude, centerT)
+        let zoom = arc.zoom(at: t)
+        // bearing / tilt は距離と無関係なので従来どおり時間で補間する。
         let bearing = lerpAngle(from.bearing, to.bearing, t)
         let tilt = lerp(from.tilt, to.tilt, t)
 
@@ -304,11 +314,6 @@ private final class CameraAnimator {
     private func lerpAngle(_ from: Double, _ to: Double, _ t: Double) -> Double {
         let delta = ((to - from + 540).truncatingRemainder(dividingBy: 360)) - 180
         return from + delta * t
-    }
-
-    private func zoomArc(_ t: Double) -> Double {
-        guard zoomArcAmplitude > 0 else { return 0 }
-        return -zoomArcAmplitude * sin(.pi * t)
     }
 
     private func easeInOut(_ t: Double) -> Double {
