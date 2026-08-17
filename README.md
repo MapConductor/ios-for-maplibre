@@ -10,6 +10,12 @@ Even using the wrapper API, you can still access the native MapLibre view if you
 
 https://mapconductor.com/setup/ios/maplibre/
 
+### API key
+
+**No API key.** MapLibre renders from whatever style URL you point it at. If that
+style or its tiles come from a commercial provider, the key belongs to the style
+URL, not to this module.
+
 ## Usage
 
 ```swift
