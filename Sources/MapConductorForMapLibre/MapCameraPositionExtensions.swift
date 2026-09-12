@@ -1,7 +1,7 @@
 import CoreLocation
 import Foundation
 import MapLibre
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 private let converter = MapLibreZoomAltitudeConverter()
 private let negativeTiltTargetDistanceScale = 1.83
@@ -42,7 +42,7 @@ extension MapCameraPosition {
             return MapLibreCameraState(
                 center: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
                 zoom: mapLibreZoom,
-                bearing: bearing,
+                bearing: CameraBearing.toNativeHeading(bearing),
                 tilt: tilt
             )
         }
@@ -54,7 +54,7 @@ extension MapCameraPosition {
         let maplibreZoomForAltitude = MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom(zoom)
         let altitude = converter.zoomLevelToAltitude(zoomLevel: maplibreZoomForAltitude, latitude: position.latitude, tilt: 0.0)
         let distanceForward = altitude * cos(tiltAbsRad) * tan(tiltAbsRad) * negativeTiltTargetDistanceScale
-        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: bearing)
+        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: CameraBearing.toNativeHeading(bearing))
         let adjustedZoom = zoom + negativeTiltZoomOffsetAtMaxTilt * (tiltAbsDeg / 60.0)
         
         let mapLibreZoom = MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom(adjustedZoom)
@@ -63,7 +63,7 @@ extension MapCameraPosition {
         return MapLibreCameraState(
             center: CLLocationCoordinate2D(latitude: target.latitude, longitude: target.longitude),
             zoom: mapLibreZoom,
-            bearing: bearing,
+            bearing: CameraBearing.toNativeHeading(bearing),
             tilt: tiltAbsDeg
         )
     }
@@ -82,7 +82,7 @@ extension MapLibreCameraState {
             return MapCameraPosition(
                 position: GeoPoint(latitude: center.latitude, longitude: center.longitude, altitude: 0),
                 zoom: MapLibreZoomAltitudeConverter.maplibreZoomToGoogleZoom(zoom),
-                bearing: bearing,
+                bearing: CameraBearing.bearingFromNativeHeading(bearing),
                 tilt: tilt,
                 visibleRegion: visibleRegion
             )
@@ -103,7 +103,7 @@ extension MapLibreCameraState {
         return MapCameraPosition(
             position: originalPosition,
             zoom: originalGoogleZoom,
-            bearing: bearing,
+            bearing: CameraBearing.bearingFromNativeHeading(bearing),
             tilt: -tiltAbsDeg,
             visibleRegion: visibleRegion
         )
