@@ -179,6 +179,15 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
     }
 
     public func updateContent(_ content: MapViewContent) {
+        let start = DispatchTime.now().uptimeNanoseconds
+        defer {
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+            if ms > 50 {
+                // SwiftUI の updateUIView から毎回呼ばれる。カメラ操作中に
+                // ここが重いと、その時間ぶんジェスチャが止まる。
+                MCLog.probe("SLOW updateContent \(Int(ms))ms markers=\(content.markers.count)")
+            }
+        }
         if let mapView {
             polylineController?.setCurrentCameraPosition(currentCameraPosition(from: mapView))
         }

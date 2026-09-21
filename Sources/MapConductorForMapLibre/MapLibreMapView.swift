@@ -43,7 +43,14 @@ public struct MapLibreMapView: View {
         // content lambda. Bracketing the pass lets a removed plugin be noticed.
         let support = state.serviceRegistry.get(MarkerRenderingSupportKey.self)
         support?.beginContentPass()
+        let contentStart = DispatchTime.now().uptimeNanoseconds
         let mapContent = MapServiceRegistryScope.with(state.serviceRegistry) { content() }
+        let contentMs = Double(DispatchTime.now().uptimeNanoseconds - contentStart) / 1e6
+        if contentMs > 50 {
+            // アプリ側の content クロージャが重い場合はここに出る。body は
+            // カメラが動くたびに再評価されるので、ここの重さは操作の重さになる。
+            MCLog.probe("SLOW content() \(Int(contentMs))ms markers=\(mapContent.markers.count)")
+        }
         support?.endContentPass()
         return MapViewBase(
             attributionRules: state.mapDesignType.attributionRules,

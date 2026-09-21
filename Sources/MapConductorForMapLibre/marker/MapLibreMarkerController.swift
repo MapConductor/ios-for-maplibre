@@ -2,7 +2,7 @@ import Combine
 import CoreGraphics
 import CoreLocation
 import MapLibre
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import UIKit
 
 @MainActor
@@ -11,6 +11,8 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
 
     private var markerSubscriptions: [String: AnyCancellable] = [:]
     private var markerStatesById: [String: MarkerState] = [:]
+    /// 同一一覧の再送を見抜く門番。詳細は型のコメントに。
+    private var syncIdentity = MarkerListIdentity()
     /// スタイル読み込み待ちの取り込み。捨てずに保留し、`onStyleLoaded` で流す。
     /// 「なぜ待つ必要があるか」は `DeferredUntilReady` の説明にある（実測 51 秒の件）。
     private lazy var styleGate = DeferredUntilReady<[MarkerState]> { [weak self] states in
@@ -101,6 +103,16 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
 
     func syncMarkers(_ markers: [Marker]) {
         MCLog.marker("MapLibreMarkerController.syncMarkers count=\(markers.count) styleReady=\(styleGate.isReady)")
+
+        // 同じ一覧の再送は入口で帰す。SwiftUI はカメラが動くたびに body を
+        // 再評価し、そのたびに全マーカーがここへ来る。なぜそれが実害か
+        // （144k 件で操作の 89% が凍った）は core の MarkerListIdentity に。
+        guard syncIdentity.shouldProcess(markers) else {
+            if styleGate.isReady { refreshTileLayerIfNeeded() }
+            return
+        }
+
+        let syncStart = DispatchTime.now().uptimeNanoseconds
         let newIds = Set(markers.map { $0.id })
         let oldIds = Set(markerStatesById.keys)
 
@@ -131,11 +143,14 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
             markerSubscriptions[id]?.cancel()
             markerSubscriptions.removeValue(forKey: id)
         }
+        let syncMs = Double(DispatchTime.now().uptimeNanoseconds - syncStart) / 1e6
+        if syncMs > 50 {
+            MCLog.probe("SLOW syncMarkers full pass \(Int(syncMs))ms count=\(markers.count)")
+        }
     }
 
     private func subscribeToMarker(_ state: MarkerState) {
         guard markerSubscriptions[state.id] == nil else { return }
-        MCLog.marker("MapLibreMarkerController.subscribe id=\(state.id)")
         markerSubscriptions[state.id] = state.asFlow()
             .dropFirst() // Skip initial value to avoid triggering update on subscription
             .receive(on: DispatchQueue.main)
