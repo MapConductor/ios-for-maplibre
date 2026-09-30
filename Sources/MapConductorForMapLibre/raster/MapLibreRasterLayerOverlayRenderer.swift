@@ -14,7 +14,20 @@ final class MapLibreRasterLayer {
 @MainActor
 final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer<MapLibreRasterLayer> {
     private weak var mapView: MLNMapView?
-    private var style: MLNStyle?
+    private var loadedStyle: MLNStyle?
+
+    /// The style, only while it is the one the map draws.
+    ///
+    /// `MLNMapView.style` is nil while a new style loads and a different
+    /// object once it has. The object handed to `onStyleLoaded` outlives the
+    /// native style it wrapped, and touching it after a handoff reads freed
+    /// memory: a raster layer added while a vector style was replacing the
+    /// basemap took MapTiler down with a SIGSEGV in `createLayerSync`. A
+    /// layer skipped here is made again by `onStyleLoaded` for the new style.
+    private var style: MLNStyle? {
+        guard let loadedStyle, let current = mapView?.style, current === loadedStyle else { return nil }
+        return loadedStyle
+    }
 
     init(mapView: MLNMapView?) {
         self.mapView = mapView
@@ -22,11 +35,11 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
     }
 
     func onStyleLoaded(_ style: MLNStyle) {
-        self.style = style
+        loadedStyle = style
     }
 
     func unbind() {
-        style = nil
+        loadedStyle = nil
         mapView = nil
     }
 
