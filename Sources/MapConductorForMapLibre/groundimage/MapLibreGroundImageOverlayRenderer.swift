@@ -6,7 +6,19 @@ import MapLibre
 @MainActor
 final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRenderer<MapLibreGroundImageHandle> {
     private weak var mapView: MLNMapView?
-    private var style: MLNStyle?
+    private var loadedStyle: MLNStyle?
+
+    /// The style, only while it is the one the map draws.
+    ///
+    /// Same rule as `MapLibreRasterLayerOverlayRenderer.style`: the object
+    /// handed to `onStyleLoaded` outlives the native style it wrapped. A
+    /// design change and an overlay change in the same SwiftUI update land
+    /// here right after `styleURL` is replaced, and removing a ground image
+    /// from the replaced style crashed with a SIGSEGV.
+    private var style: MLNStyle? {
+        guard let loadedStyle, let current = mapView?.style, current === loadedStyle else { return nil }
+        return loadedStyle
+    }
 
     init(mapView: MLNMapView?) {
         self.mapView = mapView
@@ -14,11 +26,11 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
     }
 
     func onStyleLoaded(_ style: MLNStyle) {
-        self.style = style
+        loadedStyle = style
     }
 
     func unbind() {
-        style = nil
+        loadedStyle = nil
         mapView = nil
     }
 
