@@ -10,5 +10,7 @@ Pod::Spec.new do |s|
   s.swift_version = "5.9"
   s.source_files = "Sources/MapConductorForMapLibre/**/*.swift"
   s.dependency "MapConductorCore"
+  # See CMapLibreStyleTry.podspec for why the Objective-C shim is its own pod.
+  s.dependency "CMapLibreStyleTry"
   s.dependency "MapLibre", "~> 6.20"
 end

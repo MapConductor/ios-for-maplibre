@@ -45,6 +45,25 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
     )
     private var isStyleLoaded = false
     private weak var loadedStyle: MLNStyle?
+    /// The document ``loadedStyle`` was loaded from.
+    ///
+    /// Compared against the one the state asks for, to answer whether the
+    /// style on screen is the one anything may be changed against. MapLibre
+    /// keeps the outgoing `MLNStyle` alive and reachable across a load, and
+    /// the style URL is not assigned until SwiftUI next syncs, so "there is
+    /// a style" and "there is *this* style" are different questions. Only
+    /// the second one is `isReady`.
+    private var loadedStyleURL: String?
+
+    /// Whether the style on screen is the document the state asks for.
+    ///
+    /// What ``MapLibreStyleMutationTarget`` answers `isReady` with: the
+    /// deltas of a vector style are compiled for one document, and applying
+    /// them to the one it replaces finds none of its layers -- which the
+    /// caller can only read as "this map cannot set these properties".
+    var isShowingRequestedStyle: Bool {
+        loadedStyle != nil && loadedStyleURL == state.mapDesignType.styleJsonURL
+    }
     /// android-sdk の `cameraRestriction?.let { controller.setCameraRestriction(it) }` 相当。
     /// 変化検知は `MapViewCoordinatorBase.applyCameraRestriction(_:to:)` が行う。
     public func applyCameraRestriction(_ restriction: CameraRestriction?) {
@@ -63,6 +82,49 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
         // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
         // from the registry; this provider never learns that clustering exists.
         state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
+        // MapLibre draws vector styles natively: a layer with a style to show
+        // hands it over instead of rasterising it.
+        state.serviceRegistry.put(
+            VectorStyleSupportKey.self,
+            VectorStyleAsDesign(
+                state: state,
+                designId: { $0.id },
+                // MapLibre's design is a plain style document, so "adjust
+                // whatever is showing" has something to fetch here. Mapbox's
+                // is `mapbox://…` and MapTiler's is a cloud id, so those
+                // answer nil for their built-ins and the app is told rather
+                // than shown an unstyled map.
+                urlOf: { design in
+                    design.styleJsonURL.hasPrefix("http") ? design.styleJsonURL : nil
+                }
+            ) { url, rules in
+                MapLibreDesign(id: "vector-style:\(url)", styleJsonURL: url, attributionRules: rules)
+            }
+        )
+        // MapLibre can also be told to change a loaded style in place, so
+        // adjusting one need not hand it a new document -- which would drop
+        // its tiles and rebuild every overlay the app added. `VectorStyle`
+        // looks this up and takes the cheap road when it is here.
+        //
+        // This is the provider whose SDK cannot set every spec key by name,
+        // so the set it comes back with is not always empty. See
+        // `MapLibreStyleMutationTarget`.
+        let mutations = StyleMutationStore { [weak self] list in
+            applyStyleMutations(
+                MapLibreStyleMutationTarget(
+                    style: { self?.loadedStyle },
+                    isReady: { self?.isShowingRequestedStyle ?? false }
+                ),
+                list
+            )
+        }
+        state.serviceRegistry.put(VectorStyleMutationSupportKey.self, mutations)
+        // Through the coordinator's own registry rather than a field here:
+        // the style installed on this map listens to the same signal, and
+        // both have to hear it.
+        styleLoadedSubscription = styleHost.onStyleLoaded { [weak mutations] in
+            mutations?.onStyleLoaded()
+        }
 
         let controller = MapLibreViewController(mapView: mapView)
         self.controller = controller
@@ -176,9 +238,19 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
         strategyManager.clear()
         isStyleLoaded = false
         loadedStyle = nil
+        loadedStyleURL = nil
     }
 
     public func updateContent(_ content: MapViewContent) {
+        let start = DispatchTime.now().uptimeNanoseconds
+        defer {
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+            if ms > 50 {
+                // SwiftUI の updateUIView から毎回呼ばれる。カメラ操作中に
+                // ここが重いと、その時間ぶんジェスチャが止まる。
+                MCLog.probe("SLOW updateContent \(Int(ms))ms markers=\(content.markers.count)")
+            }
+        }
         if let mapView {
             polylineController?.setCurrentCameraPosition(currentCameraPosition(from: mapView))
         }
@@ -282,6 +354,20 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
         mapView.contentScaleFactor = UIScreen.main.scale
         mapView.layer.contentsScale = UIScreen.main.scale
         if let styleURL = URL(string: state.mapDesignType.styleJsonURL), mapView.styleURL != styleURL {
+            // The style on screen stops being the one anything may be
+            // changed against, now and not when the new one arrives.
+            //
+            // `loadedStyle` is what `MapLibreStyleMutationTarget` is asked
+            // about, and MapLibre keeps the old `MLNStyle` alive through the
+            // load. Left pointing at it, every adjustment compiled for the
+            // incoming document is tried against the outgoing one, finds
+            // none of its layers, and is reported as a property this map
+            // "cannot set by name" -- 552 of them, for a map that was
+            // merely still loading. `didFinishLoading` puts it back, and
+            // the mutation store re-applies the whole set then.
+            isStyleLoaded = false
+            loadedStyle = nil
+            loadedStyleURL = nil
             mapView.styleURL = styleURL
         }
         mapView.isScrollEnabled = state.uiSettings.scrollGesture
@@ -297,8 +383,12 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
     public func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
         isStyleLoaded = true
         loadedStyle = style
+        loadedStyleURL = mapView.styleURL?.absoluteString
         applyLoadedStyle(style)
     }
+
+    /// Keeps the mutation store listening for as long as this host lives.
+    private var styleLoadedSubscription: MapStyleInstallation?
 
     private func applyLoadedStyle(_ style: MLNStyle) {
         groundImageController?.onStyleLoaded(style)
@@ -316,6 +406,10 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
         overlayScope?.polygonCollector.flush()
         strategyManager.renderer?.onStyleLoaded(style)
         strategyManager.flush()
+        // Whatever a vector style adjustment applied is gone with the old
+        // style; this is where it goes back on. Everything that cares --
+        // the mutation store, the installed style -- hears it from here.
+        notifyStyleLoaded()
     }
 
     public func mapViewDidFinishLoadingMap(_ mapView: MLNMapView) {

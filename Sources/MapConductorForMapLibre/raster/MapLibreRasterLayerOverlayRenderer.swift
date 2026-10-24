@@ -14,7 +14,20 @@ final class MapLibreRasterLayer {
 @MainActor
 final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer<MapLibreRasterLayer> {
     private weak var mapView: MLNMapView?
-    private var style: MLNStyle?
+    private var loadedStyle: MLNStyle?
+
+    /// The style, only while it is the one the map draws.
+    ///
+    /// `MLNMapView.style` is nil while a new style loads and a different
+    /// object once it has. The object handed to `onStyleLoaded` outlives the
+    /// native style it wrapped, and touching it after a handoff reads freed
+    /// memory: a raster layer added while a vector style was replacing the
+    /// basemap took MapTiler down with a SIGSEGV in `createLayerSync`. A
+    /// layer skipped here is made again by `onStyleLoaded` for the new style.
+    private var style: MLNStyle? {
+        guard let loadedStyle, let current = mapView?.style, current === loadedStyle else { return nil }
+        return loadedStyle
+    }
 
     init(mapView: MLNMapView?) {
         self.mapView = mapView
@@ -22,11 +35,11 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
     }
 
     func onStyleLoaded(_ style: MLNStyle) {
-        self.style = style
+        loadedStyle = style
     }
 
     func unbind() {
-        style = nil
+        loadedStyle = nil
         mapView = nil
     }
 
@@ -69,8 +82,30 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
         }
         if zIndex >= 0, zIndex < conductorIndices.count {
             style.insertLayer(layer, at: UInt(conductorIndices[zIndex]))
+            return
+        }
+        if let anchor = firstBasemapLabelLayer(style) {
+            style.insertLayer(layer, below: anchor)
         } else {
             style.addLayer(layer)
+        }
+    }
+
+    /// A raster overlay goes above the basemap's geometry but **below its
+    /// labels**.
+    ///
+    /// Appended at the top of the style instead, it covers the place names,
+    /// road names and shields the backend draws -- a vector tile layer's own
+    /// roads run straight through them, which is what "the labels are under
+    /// the lines" looks like. Every raster overlay we add has the same
+    /// problem, so the rule lives here rather than in each of them.
+    ///
+    /// Our own layers are skipped when looking for the anchor: markers are a
+    /// symbol layer too, and anchoring to them would put the raster back above
+    /// the labels -- and only once a marker existed.
+    private func firstBasemapLabelLayer(_ style: MLNStyle) -> MLNStyleLayer? {
+        style.layers.first {
+            $0 is MLNSymbolStyleLayer && !$0.identifier.hasPrefix("mapconductor-")
         }
     }
 

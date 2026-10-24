@@ -27,12 +27,24 @@ let package = Package(
         .package(url: "https://github.com/maplibre/maplibre-gl-native-distribution", from: "6.31.0"),
     ],
     targets: [
+        // MapLibre's style API raises Objective-C exceptions, which Swift
+        // cannot catch. See the header.
+        .target(name: "CMapLibreStyleTry"),
         .target(
             name: "MapConductorForMapLibre",
             dependencies: [
+                "CMapLibreStyleTry",
                 .product(name: "MapConductorCore", package: "ios-sdk-core"),
                 .product(name: "MapLibre", package: "maplibre-gl-native-distribution"),
             ]
+        ),
+        // The vector style adapter is the one part of this provider that can
+        // be checked without a map on screen: a style layer is a real object
+        // before it is added to a style, so what reaches its properties can
+        // be read back.
+        .testTarget(
+            name: "MapConductorForMapLibreTests",
+            dependencies: ["MapConductorForMapLibre"]
         ),
     ]
 )
