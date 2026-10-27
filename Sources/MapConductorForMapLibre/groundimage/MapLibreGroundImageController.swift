@@ -6,6 +6,7 @@ import MapLibre
 @MainActor
 final class MapLibreGroundImageController: SlottedOverlayController {
     private weak var mapView: MLNMapView?
+    private weak var loadedStyle: MLNStyle?
     private let renderer: MapLibreGroundImageOverlayRenderer
     private let groundImageManager: GroundImageManager<MapLibreGroundImageHandle>
 
@@ -24,7 +25,18 @@ final class MapLibreGroundImageController: SlottedOverlayController {
     }
 
     func onStyleLoaded(_ style: MLNStyle) {
+        let styleChanged = loadedStyle !== style
+        loadedStyle = style
         renderer.onStyleLoaded(style)
+
+        // 新しい MLNStyle は古いスタイルに作ったソースもレイヤも持たない。覚えている
+        // ハンドルを捨て、markReady が流す最後の一式で全部作り直させる。捨てないと
+        // 状態の変わらない画像は「適用済み」として飛ばされ、古いスタイルと一緒に消える。
+        // `MapLibreRasterLayerController.onStyleLoaded` と同じ。
+        if styleChanged {
+            groundImageManager.clear()
+        }
+
         styleGate.markReady()
     }
 
