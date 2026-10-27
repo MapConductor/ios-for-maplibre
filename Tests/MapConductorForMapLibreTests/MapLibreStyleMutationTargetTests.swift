@@ -16,7 +16,7 @@ import XCTest
  map on screen.
  */
 final class MapLibreStyleMutationTargetTests: XCTestCase {
-    private let target = MapLibreStyleMutationTarget(style: { nil })
+    private let target = MapLibreStyleMutationTarget(style: { nil }, isReady: { false })
 
     private func lineLayer() -> MLNLineStyleLayer {
         MLNLineStyleLayer(
@@ -259,7 +259,7 @@ final class MapLibreStyleMutationTargetTests: XCTestCase {
 
     /// A filter MapLibre cannot model goes the same way.
     func testAFilterMapLibreCannotModelIsReportedNotFatal() {
-        let subject = MapLibreStyleMutationTarget(style: { nil })
+        let subject = MapLibreStyleMutationTarget(style: { nil }, isReady: { false })
         // No style, so nothing is reached -- the point is only that a
         // malformed filter does not raise on the way in.
         XCTAssertNoThrow(try subject.setFilter("roads", "[\"nonsense\"]"))
