@@ -216,6 +216,8 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
         await groundImageController?.clear()
         await circleController?.clear()
         await rasterController?.clear()
+        // strategy（クラスタリングなど）が描いたマーカーも消す。
+        await state.serviceRegistry.clearMarkerRendering()
     }
 
     public func unbind() {
