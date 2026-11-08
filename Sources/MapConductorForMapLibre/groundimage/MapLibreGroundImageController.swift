@@ -147,6 +147,17 @@ final class MapLibreGroundImageController: SlottedOverlayController {
             }
     }
 
+    /// `clearOverlays()` 用。描画済みの画像を外して空にする（地図と renderer は残す）。
+    ///
+    /// コアの GroundImageController を継承していないので、他の種類と同じ `clear()` をここで持つ。
+    /// 空の一式を styleGate へ渡すので、スタイル読み込み前でも後でも、読み込み直しても戻らない。
+    func clear() async {
+        groundImageSubscriptions.values.forEach { $0.cancel() }
+        groundImageSubscriptions.removeAll()
+        groundImageStatesById.removeAll()
+        styleGate.submit([])
+    }
+
     func unbind() {
         let entities = groundImageManager.allEntities()
         for entity in entities {
