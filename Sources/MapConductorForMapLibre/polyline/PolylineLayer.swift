@@ -1,4 +1,5 @@
 import Foundation
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 
 final class PolylineLayer {
@@ -44,7 +45,7 @@ final class PolylineLayer {
             if layer.responds(to: Selector(("lineSortKey"))) {
                 layer.setValue(NSExpression(forKeyPath: Prop.zIndex), forKey: "lineSortKey")
             }
-            style.addLayer(layer)
+            MapLibreOverlayStacking.insert(layer, OverlayStackKey(.polyline), into: style)
         }
 
         self.source = source

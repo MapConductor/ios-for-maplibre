@@ -1,4 +1,4 @@
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 
 final class MapLibreRasterLayer {
@@ -77,37 +77,15 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
     /// index put zIndex=0 layers at the bottom of the style stack — beneath
     /// the basemap — so they rendered but were never visible.
     private func insertLayer(_ layer: MLNRasterStyleLayer, zIndex: Int, style: MLNStyle) {
-        let conductorIndices = style.layers.indices.filter {
-            style.layers[$0].identifier.hasPrefix("mapconductor-raster-layer-")
-        }
-        if zIndex >= 0, zIndex < conductorIndices.count {
-            style.insertLayer(layer, at: UInt(conductorIndices[zIndex]))
-            return
-        }
-        if let anchor = firstBasemapLabelLayer(style) {
-            style.insertLayer(layer, below: anchor)
-        } else {
-            style.addLayer(layer)
-        }
+        zIndexByLayerId[layer.identifier] = zIndex
+        // ポリゴンのタイル（PolygonTiler）もこの経路で載る。帯はレイヤ ID から決める。
+        let band = OverlayStacking.band(ofStyleLayerId: layer.identifier) ?? .rasterLayer
+        let key = band == .rasterLayer ? OverlayStackKey(.rasterLayer, zIndex: zIndex) : OverlayStackKey(band)
+        MapLibreOverlayStacking.insert(layer, key, into: style, rasterZIndex: zIndexByLayerId)
     }
 
-    /// A raster overlay goes above the basemap's geometry but **below its
-    /// labels**.
-    ///
-    /// Appended at the top of the style instead, it covers the place names,
-    /// road names and shields the backend draws -- a vector tile layer's own
-    /// roads run straight through them, which is what "the labels are under
-    /// the lines" looks like. Every raster overlay we add has the same
-    /// problem, so the rule lives here rather than in each of them.
-    ///
-    /// Our own layers are skipped when looking for the anchor: markers are a
-    /// symbol layer too, and anchoring to them would put the raster back above
-    /// the labels -- and only once a marker existed.
-    private func firstBasemapLabelLayer(_ style: MLNStyle) -> MLNStyleLayer? {
-        style.layers.first {
-            $0 is MLNSymbolStyleLayer && !$0.identifier.hasPrefix("mapconductor-")
-        }
-    }
+    /// 差し込み位置を決めるための、載せているラスターの zIndex（スタイルのレイヤは zIndex を持たない）。
+    private var zIndexByLayerId: [String: Int] = [:]
 
     func updateLayerSync(
         layer: MapLibreRasterLayer,
