@@ -1,4 +1,5 @@
 import Foundation
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 
 /// Draws circles as "fill (MLNFillStyleLayer) + stroke (MLNLineStyleLayer)".
@@ -50,7 +51,7 @@ final class CircleLayer {
         let fillLayer = existingFill ?? MLNFillStyleLayer(identifier: layerId, source: source)
         if existingFill == nil {
             fillLayer.fillColor = NSExpression(forKeyPath: Prop.fillColor)
-            style.addLayer(fillLayer)
+            MapLibreOverlayStacking.insert(fillLayer, OverlayStackKey(.circle), into: style)
         }
 
         let strokeLayer = existingStroke ?? MLNLineStyleLayer(identifier: strokeLayerId, source: source)

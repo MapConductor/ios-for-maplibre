@@ -256,7 +256,8 @@ final class MapLibreMarkerController: AbstractMarkerController<MLNPointFeature, 
         let source = MLNRasterTileSource(identifier: sourceId, tileURLTemplates: [urlTemplate], options: options)
         let layer = MLNRasterStyleLayer(identifier: layerId, source: source)
         style.addSource(source)
-        style.addLayer(layer)
+        // マーカーのタイルはマーカーと同じ帯。
+        MapLibreOverlayStacking.insert(layer, OverlayStackKey(.marker), into: style)
     }
 
     /// Hit-test tiled markers at the given screen point (pts). Returns true if a clickable marker was found.
