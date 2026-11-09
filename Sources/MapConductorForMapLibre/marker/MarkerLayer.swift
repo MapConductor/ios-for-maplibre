@@ -1,4 +1,5 @@
 import Foundation
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 import UIKit
 
@@ -48,7 +49,7 @@ final class MarkerLayer {
             layer.iconScale = NSExpression(forConstantValue: 1.0 / UIScreen.main.scale)
             layer.iconTranslationAnchor = NSExpression(forConstantValue: "map")
             layer.iconOffset = NSExpression(forKeyPath: MapLibreMarkerRenderer.Prop.iconAnchor)
-            style.addLayer(layer)
+            MapLibreOverlayStacking.insert(layer, OverlayStackKey(.marker), into: style)
         }
 
         self.source = source
