@@ -1,6 +1,6 @@
 import CoreLocation
 import Foundation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 
 @MainActor
@@ -125,28 +125,7 @@ final class MapLibreGroundImageOverlayRenderer: AbstractGroundImageOverlayRender
     }
 
     private func insertLayer(_ layer: MLNRasterStyleLayer, into style: MLNStyle) {
-        if let below = findBelowLayer(style: style) {
-            style.insertLayer(layer, below: below)
-        } else {
-            style.addLayer(layer)
-        }
-    }
-
-    private func findBelowLayer(style: MLNStyle) -> MLNStyleLayer? {
-        let prefixes = [
-            "mapconductor-polylines-layer-",
-            "mapconductor-polygons-fill-",
-            "mapconductor-polygons-line-",
-            "mapconductor-circles-layer-",
-            "mapconductor-cluster-layer-",
-            "mapconductor-markers-layer-"
-        ]
-        for prefix in prefixes {
-            if let layer = style.layers.first(where: { $0.identifier.hasPrefix(prefix) }) {
-                return layer
-            }
-        }
-        return nil
+        MapLibreOverlayStacking.insert(layer, OverlayStackKey(.groundImage), into: style)
     }
 
     private func sourceId(for id: String) -> String {

@@ -1,4 +1,5 @@
 import Foundation
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 
 final class PolygonLayer {
@@ -47,7 +48,7 @@ final class PolygonLayer {
             if fillLayer.responds(to: Selector(("fillSortKey"))) {
                 fillLayer.setValue(NSExpression(forKeyPath: Prop.zIndex), forKey: "fillSortKey")
             }
-            style.addLayer(fillLayer)
+            MapLibreOverlayStacking.insert(fillLayer, OverlayStackKey(.polygon), into: style)
         }
 
         let lineLayer = existingLine ?? MLNLineStyleLayer(identifier: lineLayerId, source: source)
@@ -59,7 +60,7 @@ final class PolygonLayer {
             if lineLayer.responds(to: Selector(("lineSortKey"))) {
                 lineLayer.setValue(NSExpression(forKeyPath: Prop.zIndex), forKey: "lineSortKey")
             }
-            style.addLayer(lineLayer)
+            MapLibreOverlayStacking.insert(lineLayer, OverlayStackKey(.polygon), into: style)
         }
 
         self.source = source

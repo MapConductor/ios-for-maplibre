@@ -14,6 +14,13 @@ final class MapLibreGroundImageController: SlottedOverlayController {
 
     private var groundImageSubscriptions: [String: AnyCancellable] = [:]
     private var groundImageStatesById: [String: GroundImageState] = [:]
+    /// `clear()` の時点で送られていた一式。同じ一式が送り直されている間は描かない。
+    ///
+    /// core の `OverlayCollector` と振る舞いをそろえるため。あちらは clear 後も一式を覚えていて、
+    /// 同じインスタンスの再送では何もせず、顔ぶれが変わったか作り直された state が来たときだけ
+    /// 全部を描き直す。これが無いと、SwiftUI が body を再評価するたび（clear の直後にも来る）に
+    /// 消したはずの画像が戻っていた。
+    private var clearedStates: [String: GroundImageState]?
     /// スタイル読み込み待ちの取り込み。捨てずに保留し、`onStyleLoaded` で流す。
     /// 「なぜ待つ必要があるか」は `DeferredUntilReady` の説明にある。
     private lazy var styleGate = DeferredUntilReady<[GroundImageState]> { [weak self] states in
@@ -43,6 +50,12 @@ final class MapLibreGroundImageController: SlottedOverlayController {
     }
 
     func syncGroundImages(_ groundImages: [GroundImage]) {
+        if let cleared = clearedStates {
+            let resent = groundImages.count == cleared.count
+                && groundImages.allSatisfy { cleared[$0.state.id] === $0.state }
+            if resent { return }
+            clearedStates = nil
+        }
         let newIds = Set(groundImages.map { $0.id })
         let oldIds = Set(groundImageStatesById.keys)
 
@@ -156,6 +169,18 @@ final class MapLibreGroundImageController: SlottedOverlayController {
             }
     }
 
+    /// `clearOverlays()` 用。描画済みの画像を外して空にする（地図と renderer は残す）。
+    ///
+    /// コアの GroundImageController を継承していないので、他の種類と同じ `clear()` をここで持つ。
+    /// 空の一式を styleGate へ渡すので、スタイル読み込み前でも後でも、読み込み直しても戻らない。
+    func clear() async {
+        groundImageSubscriptions.values.forEach { $0.cancel() }
+        groundImageSubscriptions.removeAll()
+        clearedStates = groundImageStatesById
+        groundImageStatesById.removeAll()
+        styleGate.submit([])
+    }
+
     func unbind() {
         addedTracker.reset()
         let entities = groundImageManager.allEntities()
@@ -165,6 +190,7 @@ final class MapLibreGroundImageController: SlottedOverlayController {
         groundImageSubscriptions.values.forEach { $0.cancel() }
         groundImageSubscriptions.removeAll()
         groundImageStatesById.removeAll()
+        clearedStates = nil
         styleGate.reset()
         renderer.unbind()
         mapView = nil
