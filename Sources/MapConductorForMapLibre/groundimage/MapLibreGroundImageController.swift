@@ -1,6 +1,6 @@
 import Combine
 import CoreLocation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 
 @MainActor
@@ -9,6 +9,8 @@ final class MapLibreGroundImageController: SlottedOverlayController {
     private weak var loadedStyle: MLNStyle?
     private let renderer: MapLibreGroundImageOverlayRenderer
     private let groundImageManager: GroundImageManager<MapLibreGroundImageHandle>
+    /// Which ground images have reached the map, for their `onAdded`.
+    private let addedTracker = OverlayAddedTracker()
 
     private var groundImageSubscriptions: [String: AnyCancellable] = [:]
     private var groundImageStatesById: [String: GroundImageState] = [:]
@@ -118,6 +120,9 @@ final class MapLibreGroundImageController: SlottedOverlayController {
     private func syncGroundImagesDirectly(_ states: [GroundImageState]) {
         let previous = Set(groundImageManager.allEntities().map { $0.state.id })
         let newIds = Set(states.map { $0.id })
+        // The app's list: anything it no longer has can be added again later.
+        addedTracker.retain(newIds)
+        var created: [GroundImageState] = []
 
         for id in previous.subtracting(newIds) {
             if let entity = groundImageManager.getEntity(id) {
@@ -143,9 +148,13 @@ final class MapLibreGroundImageController: SlottedOverlayController {
             } else {
                 if let handle = renderer.createGroundImageSync(state: state) {
                     groundImageManager.registerEntity(GroundImageEntity(groundImage: handle, state: state))
+                    created.append(state)
                 }
             }
         }
+        // On the main actor, right after the layers were created. A style reload
+        // re-creates them without calling `onAdded` again: the tracker still has them.
+        for state in addedTracker.admit(created) { state.callOnAdded() }
     }
 
     private func subscribeToGroundImage(_ state: GroundImageState) {
@@ -173,6 +182,7 @@ final class MapLibreGroundImageController: SlottedOverlayController {
     }
 
     func unbind() {
+        addedTracker.reset()
         let entities = groundImageManager.allEntities()
         for entity in entities {
             renderer.removeGroundImageSync(entity: entity)

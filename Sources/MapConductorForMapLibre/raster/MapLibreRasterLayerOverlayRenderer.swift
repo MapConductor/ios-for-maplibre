@@ -29,6 +29,9 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
         return loadedStyle
     }
 
+    /// Whether a layer added now goes into the style the map shows.
+    var isStyleLoaded: Bool { style != nil }
+
     init(mapView: MLNMapView?) {
         self.mapView = mapView
         super.init()
@@ -78,9 +81,9 @@ final class MapLibreRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRender
     /// the basemap — so they rendered but were never visible.
     private func insertLayer(_ layer: MLNRasterStyleLayer, zIndex: Int, style: MLNStyle) {
         zIndexByLayerId[layer.identifier] = zIndex
-        // ポリゴンのタイル（PolygonTiler）もこの経路で載る。帯はレイヤ ID から決める。
-        let band = OverlayStacking.band(ofStyleLayerId: layer.identifier) ?? .rasterLayer
-        let key = band == .rasterLayer ? OverlayStackKey(.rasterLayer, zIndex: zIndex) : OverlayStackKey(band)
+        // ポリゴンのタイル（PolygonTiler）・ポリラインのタイル（PolylineTiler）もこの経路で載る。
+        // キーはレイヤ ID から決める（ポリラインのタイルはポリラインの帯の一番下）。
+        let key = OverlayStacking.rasterKey(styleLayerId: layer.identifier, zIndex: zIndex)
         MapLibreOverlayStacking.insert(layer, key, into: style, rasterZIndex: zIndexByLayerId)
     }
 
