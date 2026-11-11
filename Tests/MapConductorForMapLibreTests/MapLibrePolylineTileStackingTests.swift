@@ -63,6 +63,7 @@ final class MapLibrePolylineTileStackingTests: XCTestCase {
     private func order(_ style: MLNStyle) -> [String] {
         style.layers.compactMap { layer -> String? in
             let id = layer.identifier
+            if id.hasPrefix("mapconductor-raster-layer-\(CircleTiler.layerId)") { return "circle-tiles" }
             if id.hasPrefix("mapconductor-raster-layer-\(PolylineTiler.layerId)") { return "polyline-tiles" }
             if id.hasPrefix("mapconductor-raster-layer-\(PolygonTiler.layerId)") { return "polygon-tiles" }
             if id.hasPrefix("mapconductor-circles-layer-") { return id.hasSuffix("-stroke") ? nil : "circles" }
@@ -74,6 +75,7 @@ final class MapLibrePolylineTileStackingTests: XCTestCase {
     private func tiles(_ raster: MapLibreRasterLayerController) async {
         await raster.upsert(state: PolylineTiler.rasterLayerState(template: "http://127.0.0.1:1/pl/v1/{z}/{x}/{y}.png"))
         await raster.upsert(state: PolygonTiler.rasterLayerState(template: "http://127.0.0.1:1/pg/v1/{z}/{x}/{y}.png"))
+        await raster.upsert(state: CircleTiler.rasterLayerState(template: "http://127.0.0.1:1/circle/v1/{z}/{x}/{y}.png"))
     }
 
     func testTilesAddedAfterTheNativeLayersGoUnderThePolylines() async {
@@ -89,7 +91,7 @@ final class MapLibrePolylineTileStackingTests: XCTestCase {
         await settle()
         await tiles(raster)
         await settle()
-        XCTAssertEqual(order(style), ["polygon-tiles", "circles", "polyline-tiles", "polylines"])
+        XCTAssertEqual(order(style), ["polygon-tiles", "circle-tiles", "circles", "polyline-tiles", "polylines"])
         raster.unbind()
         polylines.unbind()
         circles.unbind()
@@ -107,13 +109,47 @@ final class MapLibrePolylineTileStackingTests: XCTestCase {
         polylines.onStyleLoaded(style)
         circles.onStyleLoaded(style)
         await settle()
-        XCTAssertEqual(order(style), ["polygon-tiles", "circles", "polyline-tiles", "polylines"])
+        XCTAssertEqual(order(style), ["polygon-tiles", "circle-tiles", "circles", "polyline-tiles", "polylines"])
         // A new template (in-place change) re-adds the tile layer: still in its place.
         await raster.upsert(state: PolylineTiler.rasterLayerState(template: "http://127.0.0.1:1/pl/v2/{z}/{x}/{y}.png"))
         await settle()
-        XCTAssertEqual(order(style), ["polygon-tiles", "circles", "polyline-tiles", "polylines"])
+        XCTAssertEqual(order(style), ["polygon-tiles", "circle-tiles", "circles", "polyline-tiles", "polylines"])
         raster.unbind()
         polylines.unbind()
         circles.unbind()
     }
+
+    func testTiledCirclesStayOutOfNativeFeaturesAfterStyleReload() async {
+        let circles = MapLibreCircleController(mapView: mapView)
+        let raster = MapLibreRasterLayerController(mapView: mapView)
+        let tiler = CircleTiler(options: CircleTilingOptions(minCircleCount: 1))
+        tiler.onTemplate = { template, tileSize in
+            if let template {
+                await raster.upsert(state: CircleTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await raster.removeById(CircleTiler.layerId)
+            }
+        }
+        circles.tiler = tiler
+        waiter.onLoad = { style in
+            circles.onStyleLoaded(style)
+            raster.onStyleLoaded(style)
+        }
+        let style = await load()
+        await settle()
+        let state = CircleState(center: GeoPoint(latitude: 42, longitude: -71), radiusMeters: 20, id: "tiled")
+        await circles.add(data: [state])
+        XCTAssertNotNil(circles.circleManager.getEntity(state.id))
+        XCTAssertNil(circles.circleManager.getEntity(state.id)?.circle)
+        XCTAssertTrue(style.layers.contains { $0.identifier.contains(CircleTiler.layerId) })
+        circles.onStyleLoaded(style)
+        await settle()
+        XCTAssertNil(circles.circleManager.getEntity(state.id)?.circle)
+        XCTAssertEqual(circles.find(position: state.center)?.state.id, state.id)
+        await circles.clear()
+        XCTAssertFalse(style.layers.contains { $0.identifier.contains(CircleTiler.layerId) })
+        circles.unbind()
+        raster.unbind()
+    }
+
 }
