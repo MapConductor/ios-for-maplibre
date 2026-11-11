@@ -1,4 +1,4 @@
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 import UIKit
 
@@ -51,7 +51,8 @@ final class MapLibreCircleOverlayRenderer: AbstractCircleOverlayRenderer<MLNPoly
     }
 
     override func onPostProcess() async {
-        let features = circleManager.allEntities().compactMap { entity -> MLNPolygonFeature? in
+        let features = circleManager.nativeEntities().compactMap { entity -> MLNPolygonFeature? in
+            guard entity.circle != nil else { return nil }
             let updated = makeFeature(for: entity.state)
             entity.circle = updated
             return updated
