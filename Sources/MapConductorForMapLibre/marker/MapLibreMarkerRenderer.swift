@@ -1,7 +1,7 @@
 import CoreGraphics
 import CoreLocation
 import Foundation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 import UIKit
 
@@ -14,6 +14,8 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
         static let iconId = "icon_id"
         static let iconAnchor = "icon-offset"
         static let isHidden = "is_hidden"
+        /// 重なり順（``MarkerDrawOrder``）。レイヤーの `symbolSortKey` が読む。大きいほど手前。
+        static let sortKey = "sort_key"
         static let defaultMarkerId = "default"
     }
 
@@ -77,6 +79,12 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
         lastBitmapIconByMarkerId.removeAll()
     }
 
+    /// マーカー帯の中の重なり順（``MarkerDrawOrder``）。`symbol-sort-key` は小さいものから描くので、
+    /// 大きいほど手前になる。足した順には頼らない（同じ地点では先に足した方が手前に描かれていた）。
+    static func sortKey(_ state: MarkerState) -> NSNumber {
+        NSNumber(value: MarkerDrawOrder.key(zIndex: state.zIndex, position: state.position))
+    }
+
     func onAdd(data: [MarkerOverlayAddParams]) async -> [MLNPointFeature?] {
         guard let style else { return [] }
         ensureDefaultIcon(style: style)
@@ -113,6 +121,7 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
                 lastBitmapIconByMarkerId.removeValue(forKey: state.id)
             }
 
+            attributes[Prop.sortKey] = Self.sortKey(state)
             feature.attributes = attributes
             return feature
         }
@@ -161,6 +170,14 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
                     attributes[Prop.iconId] = iconName
                     feature.attributes = attributes
                 }
+            }
+
+            // zIndex か位置が変わると順位も変わる。同じなら書かない（属性の書き換えは描き直しを招く）。
+            let sortKey = Self.sortKey(state)
+            if (feature.attribute(forKey: Prop.sortKey) as? NSNumber)?.doubleValue != sortKey.doubleValue {
+                var attributes = feature.attributes
+                attributes[Prop.sortKey] = sortKey
+                feature.attributes = attributes
             }
 
             return feature
