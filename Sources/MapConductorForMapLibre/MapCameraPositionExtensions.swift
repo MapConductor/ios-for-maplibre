@@ -125,10 +125,9 @@ extension MLNMapView {
             bearing: camera.heading,
             tilt: camera.pitch
         )
-        // 中心はパディング（contentInset）を除いた領域の中央。パディングと視野角も載せる。
-        let insets = automaticallyAdjustsContentInset ? UIEdgeInsets.zero : contentInset
+        // 地図の生のカメラ（中心は地図が描いている中心）。パディングは中心をずらして再現しているので、
+        // ターゲットへ戻すのは呼び出し側（``CameraPaddingEmulation/restored``）。視野角は載せる。
         return state.toMapCameraPosition(logicalTiltHint: logicalTiltHint, visibleRegion: visibleRegion).copy(
-            paddings: MapPaddings(top: insets.top, left: insets.left, bottom: insets.bottom, right: insets.right),
             fov: mapLibreVerticalFieldOfView
         )
     }

@@ -606,9 +606,32 @@ public final class MapLibreMapHost: MapViewCoordinatorBase<MapLibreViewState>, M
             farLeft: corners?.farLeft,
             farRight: corners?.farRight
         )
-        return mapView.toMapCameraPosition(
+        // 地図の中心はパディングの分ずらしてある。ターゲット（パディングを除いた領域の中央）へ戻す。
+        // 画面内なら地図の投影で直接読む。画面の外（パディングが地図より大きい）なら計算で戻す。
+        // 地図は安全領域の内側の中央を中心にしているので、計算は安全領域から測ったパディングで行う。
+        let raw = mapView.toMapCameraPosition(
             logicalTiltHint: controller?.lastLogicalTilt,
             visibleRegion: visibleRegion
+        )
+        let paddings = controller?.lastPaddings
+        let size = mapView.bounds.size
+        let computed = CameraPaddingEmulation.target(
+            forCameraCenter: raw.position,
+            camera: raw,
+            paddings: MapLibreViewController.safeAreaRelative(paddings, on: mapView),
+            fov: mapLibreVerticalFieldOfView,
+            viewportSize: size
+        )
+        return CameraPaddingEmulation.restored(
+            raw,
+            paddings: paddings,
+            fov: mapLibreVerticalFieldOfView,
+            viewportSize: size,
+            unproject: { point in
+                guard mapView.bounds.contains(point) else { return computed }
+                let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
+                return GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+            }
         )
     }
 
