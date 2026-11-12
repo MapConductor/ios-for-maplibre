@@ -13,7 +13,7 @@ let package = Package(
     name: "mapconductor-for-maplibre",
     platforms: [
         // See ios-sdk-core/Package.swift's comment: "15.0" must not be used here.
-        .iOS("15.1"),
+        .iOS("15.5"),
     ],
     products: [
         .library(
@@ -24,7 +24,7 @@ let package = Package(
     ],
     dependencies: [
         coreDependency,
-        .package(url: "https://github.com/maplibre/maplibre-gl-native-distribution", from: "6.31.0"),
+        .package(url: "https://github.com/maplibre/maplibre-gl-native-distribution", from: "7.0.0"),
     ],
     targets: [
         // MapLibre's style API raises Objective-C exceptions, which Swift
