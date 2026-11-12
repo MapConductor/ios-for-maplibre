@@ -109,6 +109,7 @@ final class MapLibreViewController: MapViewControllerProtocol {
     func moveCamera(position: MapCameraPosition) {
         guard let mapView = mapView else { return }
         lastLogicalTilt = position.tilt
+        applyContentInset(position.paddings, to: mapView)
         let cameraState = position.toMapLibreCameraState()
 
         // ★ pitch を先に、zoom を後に当てる。順序を逆にすると**傾けるたびに地図が遠ざかる**。
@@ -156,6 +157,31 @@ final class MapLibreViewController: MapViewControllerProtocol {
             duration: durationSeconds
         )
         cameraAnimator?.start()
+    }
+
+    /// `MapCameraPosition.paddings` を地図の `contentInset` にする。カメラの中心は
+    /// パディングを除いた領域の中央に来る（tilt があっても遠近はエンジンが解く）。
+    ///
+    /// 0 以外を当てている間は、安全領域による自動調整を止める（止めないと指定した値に
+    /// 安全領域が足され、中心がずれる）。0 に戻したら自動調整も戻す。`nil` は変えない。
+    fileprivate static func applyContentInset(_ paddings: MapPaddingsProtocol?, to mapView: MLNMapView) {
+        guard let paddings else { return }
+        let insets = UIEdgeInsets(top: paddings.top, left: paddings.left, bottom: paddings.bottom, right: paddings.right)
+        let isZero = insets == .zero
+        if isZero {
+            guard !mapView.automaticallyAdjustsContentInset else { return }
+            mapView.automaticallyAdjustsContentInset = true
+            mapView.setContentInset(.zero, animated: false, completionHandler: nil)
+            return
+        }
+        mapView.automaticallyAdjustsContentInset = false
+        if mapView.contentInset != insets {
+            mapView.setContentInset(insets, animated: false, completionHandler: nil)
+        }
+    }
+
+    private func applyContentInset(_ paddings: MapPaddingsProtocol?, to mapView: MLNMapView) {
+        Self.applyContentInset(paddings, to: mapView)
     }
 
     func setCameraRestriction(_ restriction: CameraRestriction?) {
@@ -288,6 +314,19 @@ private final class CameraAnimator {
             bearing: bearing,
             tilt: tilt
         )
+        // パディングも時間で補間して当ててから中心を置く（中心は常にパディングの残りの中央）。
+        if let toPaddings = to.paddings {
+            let fromPaddings = from.paddings ?? MapPaddings.Zeros
+            MapLibreViewController.applyContentInset(
+                MapPaddings(
+                    top: lerp(fromPaddings.top, toPaddings.top, t),
+                    left: lerp(fromPaddings.left, toPaddings.left, t),
+                    bottom: lerp(fromPaddings.bottom, toPaddings.bottom, t),
+                    right: lerp(fromPaddings.right, toPaddings.right, t)
+                ),
+                to: mapView
+            )
+        }
         let cameraState = currentPos.toMapLibreCameraState()
         // pitch を先に、zoom を後に。逆にすると傾けるたびに地図が遠ざかる
         // （理由は `MapLibreViewController.moveCamera` のコメント）。
