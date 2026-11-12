@@ -1,7 +1,12 @@
 import CoreLocation
 import Foundation
+import UIKit
 import MapLibre
 @_spi(MapConductorDriver) import MapConductorCore
+
+/// MapLibre のカメラの縦の視野角（度）。MapLibre Native の既定値（`2·atan(1/3)`）で、
+/// iPad Pro 11 の実測（tilt 30°〜60°）でも一致した。
+let mapLibreVerticalFieldOfView: Double = 36.87
 
 private let converter = MapLibreZoomAltitudeConverter()
 private let negativeTiltTargetDistanceScale = 1.83
@@ -120,6 +125,11 @@ extension MLNMapView {
             bearing: camera.heading,
             tilt: camera.pitch
         )
-        return state.toMapCameraPosition(logicalTiltHint: logicalTiltHint, visibleRegion: visibleRegion)
+        // 中心はパディング（contentInset）を除いた領域の中央。パディングと視野角も載せる。
+        let insets = automaticallyAdjustsContentInset ? UIEdgeInsets.zero : contentInset
+        return state.toMapCameraPosition(logicalTiltHint: logicalTiltHint, visibleRegion: visibleRegion).copy(
+            paddings: MapPaddings(top: insets.top, left: insets.left, bottom: insets.bottom, right: insets.right),
+            fov: mapLibreVerticalFieldOfView
+        )
     }
 }
