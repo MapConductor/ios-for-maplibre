@@ -1,12 +1,12 @@
 import CoreGraphics
 import CoreLocation
 import Foundation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 import UIKit
 
 @MainActor
-final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
+final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol, MarkerDrawOrderFrameReceiver {
     typealias ActualMarker = MLNPointFeature
 
     enum Prop {
@@ -14,6 +14,8 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
         static let iconId = "icon_id"
         static let iconAnchor = "icon-offset"
         static let isHidden = "is_hidden"
+        /// 重なり順（``MarkerDrawOrder``）。レイヤーの `symbolSortKey` が読む。大きいほど手前。
+        static let sortKey = "sort_key"
         static let defaultMarkerId = "default"
     }
 
@@ -77,6 +79,34 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
         lastBitmapIconByMarkerId.removeAll()
     }
 
+    /// マーカー帯の中の重なり順（``MarkerDrawOrder``）。`symbol-sort-key` は小さいものから描くので、
+    /// 大きいほど手前になる。足した順には頼らない（同じ地点では先に足した方が手前に描かれていた）。
+    func sortKey(_ state: MarkerState) -> NSNumber {
+        NSNumber(value: MarkerDrawOrder.key(zIndex: state.zIndex, position: state.position, frame: drawOrderFrame))
+    }
+
+    /// 重なり順を出すときの地図の向き。回すと ``onDrawOrderFrameChanged(_:entities:)`` が差し替える。
+    private var drawOrderFrame: MarkerDrawOrder.Frame = .northUp
+
+    /// 回したら、同じ zIndex の中の順位（画面で下ほど手前）を付け直す。`symbol-sort-key` は
+    /// 画面の向きを知らないので、地物の値を書き換えてソースへ送り直すしかない。ふつうのマーカーは
+    /// 回し終えたとき（0.5 度以上回したときだけ）に呼ばれ、回している最中は前の並びのまま。
+    func onDrawOrderFrameChanged(_ frame: MarkerDrawOrder.Frame, entities: [MarkerEntity<MLNPointFeature>]) async {
+        drawOrderFrame = frame
+        var changed = false
+        for entity in entities {
+            guard let feature = entity.marker else { continue }
+            let key = sortKey(entity.state)
+            if (feature.attribute(forKey: Prop.sortKey) as? NSNumber)?.doubleValue != key.doubleValue {
+                var attributes = feature.attributes
+                attributes[Prop.sortKey] = key
+                feature.attributes = attributes
+                changed = true
+            }
+        }
+        if changed { await onPostProcess() }
+    }
+
     func onAdd(data: [MarkerOverlayAddParams]) async -> [MLNPointFeature?] {
         guard let style else { return [] }
         ensureDefaultIcon(style: style)
@@ -113,6 +143,7 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
                 lastBitmapIconByMarkerId.removeValue(forKey: state.id)
             }
 
+            attributes[Prop.sortKey] = sortKey(state)
             feature.attributes = attributes
             return feature
         }
@@ -161,6 +192,14 @@ final class MapLibreMarkerRenderer: MarkerOverlayRendererProtocol {
                     attributes[Prop.iconId] = iconName
                     feature.attributes = attributes
                 }
+            }
+
+            // zIndex か位置が変わると順位も変わる。同じなら書かない（属性の書き換えは描き直しを招く）。
+            let sortKey = sortKey(state)
+            if (feature.attribute(forKey: Prop.sortKey) as? NSNumber)?.doubleValue != sortKey.doubleValue {
+                var attributes = feature.attributes
+                attributes[Prop.sortKey] = sortKey
+                feature.attributes = attributes
             }
 
             return feature

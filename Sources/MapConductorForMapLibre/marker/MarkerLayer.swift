@@ -1,4 +1,5 @@
 import Foundation
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 import UIKit
 
@@ -33,6 +34,8 @@ final class MarkerLayer {
         if existingLayer == nil {
             layer.iconImageName = NSExpression(forKeyPath: MapLibreMarkerRenderer.Prop.iconId)
             layer.iconAllowsOverlap = NSExpression(forConstantValue: true)
+            // 重なり順は sort_key（zIndex → 南 → 西）。既定（auto）は sort key があればそれで並べる。
+            layer.symbolSortKey = NSExpression(forKeyPath: MapLibreMarkerRenderer.Prop.sortKey)
             layer.iconIgnoresPlacement = NSExpression(forConstantValue: true)
             layer.iconAnchor = NSExpression(forConstantValue: "top-left")
             layer.iconOpacity = NSExpression(
@@ -48,7 +51,7 @@ final class MarkerLayer {
             layer.iconScale = NSExpression(forConstantValue: 1.0 / UIScreen.main.scale)
             layer.iconTranslationAnchor = NSExpression(forConstantValue: "map")
             layer.iconOffset = NSExpression(forKeyPath: MapLibreMarkerRenderer.Prop.iconAnchor)
-            style.addLayer(layer)
+            MapLibreOverlayStacking.insert(layer, OverlayStackKey(.marker), into: style)
         }
 
         self.source = source

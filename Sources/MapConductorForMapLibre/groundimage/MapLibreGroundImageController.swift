@@ -1,16 +1,26 @@
 import Combine
 import CoreLocation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import MapLibre
 
 @MainActor
 final class MapLibreGroundImageController: SlottedOverlayController {
     private weak var mapView: MLNMapView?
+    private weak var loadedStyle: MLNStyle?
     private let renderer: MapLibreGroundImageOverlayRenderer
     private let groundImageManager: GroundImageManager<MapLibreGroundImageHandle>
+    /// Which ground images have reached the map, for their `onAdded`.
+    private let addedTracker = OverlayAddedTracker()
 
     private var groundImageSubscriptions: [String: AnyCancellable] = [:]
     private var groundImageStatesById: [String: GroundImageState] = [:]
+    /// `clear()` の時点で送られていた一式。同じ一式が送り直されている間は描かない。
+    ///
+    /// core の `OverlayCollector` と振る舞いをそろえるため。あちらは clear 後も一式を覚えていて、
+    /// 同じインスタンスの再送では何もせず、顔ぶれが変わったか作り直された state が来たときだけ
+    /// 全部を描き直す。これが無いと、SwiftUI が body を再評価するたび（clear の直後にも来る）に
+    /// 消したはずの画像が戻っていた。
+    private var clearedStates: [String: GroundImageState]?
     /// スタイル読み込み待ちの取り込み。捨てずに保留し、`onStyleLoaded` で流す。
     /// 「なぜ待つ必要があるか」は `DeferredUntilReady` の説明にある。
     private lazy var styleGate = DeferredUntilReady<[GroundImageState]> { [weak self] states in
@@ -24,11 +34,28 @@ final class MapLibreGroundImageController: SlottedOverlayController {
     }
 
     func onStyleLoaded(_ style: MLNStyle) {
+        let styleChanged = loadedStyle !== style
+        loadedStyle = style
         renderer.onStyleLoaded(style)
+
+        // 新しい MLNStyle は古いスタイルに作ったソースもレイヤも持たない。覚えている
+        // ハンドルを捨て、markReady が流す最後の一式で全部作り直させる。捨てないと
+        // 状態の変わらない画像は「適用済み」として飛ばされ、古いスタイルと一緒に消える。
+        // `MapLibreRasterLayerController.onStyleLoaded` と同じ。
+        if styleChanged {
+            groundImageManager.clear()
+        }
+
         styleGate.markReady()
     }
 
     func syncGroundImages(_ groundImages: [GroundImage]) {
+        if let cleared = clearedStates {
+            let resent = groundImages.count == cleared.count
+                && groundImages.allSatisfy { cleared[$0.state.id] === $0.state }
+            if resent { return }
+            clearedStates = nil
+        }
         let newIds = Set(groundImages.map { $0.id })
         let oldIds = Set(groundImageStatesById.keys)
 
@@ -93,6 +120,9 @@ final class MapLibreGroundImageController: SlottedOverlayController {
     private func syncGroundImagesDirectly(_ states: [GroundImageState]) {
         let previous = Set(groundImageManager.allEntities().map { $0.state.id })
         let newIds = Set(states.map { $0.id })
+        // The app's list: anything it no longer has can be added again later.
+        addedTracker.retain(newIds)
+        var created: [GroundImageState] = []
 
         for id in previous.subtracting(newIds) {
             if let entity = groundImageManager.getEntity(id) {
@@ -118,9 +148,13 @@ final class MapLibreGroundImageController: SlottedOverlayController {
             } else {
                 if let handle = renderer.createGroundImageSync(state: state) {
                     groundImageManager.registerEntity(GroundImageEntity(groundImage: handle, state: state))
+                    created.append(state)
                 }
             }
         }
+        // On the main actor, right after the layers were created. A style reload
+        // re-creates them without calling `onAdded` again: the tracker still has them.
+        for state in addedTracker.admit(created) { state.callOnAdded() }
     }
 
     private func subscribeToGroundImage(_ state: GroundImageState) {
@@ -135,7 +169,20 @@ final class MapLibreGroundImageController: SlottedOverlayController {
             }
     }
 
+    /// `clearOverlays()` 用。描画済みの画像を外して空にする（地図と renderer は残す）。
+    ///
+    /// コアの GroundImageController を継承していないので、他の種類と同じ `clear()` をここで持つ。
+    /// 空の一式を styleGate へ渡すので、スタイル読み込み前でも後でも、読み込み直しても戻らない。
+    func clear() async {
+        groundImageSubscriptions.values.forEach { $0.cancel() }
+        groundImageSubscriptions.removeAll()
+        clearedStates = groundImageStatesById
+        groundImageStatesById.removeAll()
+        styleGate.submit([])
+    }
+
     func unbind() {
+        addedTracker.reset()
         let entities = groundImageManager.allEntities()
         for entity in entities {
             renderer.removeGroundImageSync(entity: entity)
@@ -143,6 +190,7 @@ final class MapLibreGroundImageController: SlottedOverlayController {
         groundImageSubscriptions.values.forEach { $0.cancel() }
         groundImageSubscriptions.removeAll()
         groundImageStatesById.removeAll()
+        clearedStates = nil
         styleGate.reset()
         renderer.unbind()
         mapView = nil

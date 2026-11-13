@@ -17,6 +17,13 @@ final class MapLibreViewController: MapViewControllerProtocol {
     private weak var mapView: MLNMapView?
     private var cameraAnimator: CameraAnimator?
     private(set) var lastLogicalTilt: Double? = nil
+    /// 最後に指定されたパディング。地図の `contentInset` には当てず、カメラの中心をずらして
+    /// 再現する（``CameraPaddingEmulation``）。読み戻しでは逆にずらす。
+    ///
+    /// `contentInset` を使うと MapLibre は視野を上へ広げる。tilt があると上のパディングが大きい
+    /// ほど画面の上端が地平線の向こうまで届き、タイルを地平線まで読み込んで固まる。中心を
+    /// ずらせば視野はパディングが無いときと同じになる（Google / HERE と同じ方式）。
+    private(set) var lastPaddings: MapPaddingsProtocol?
 
     private var cameraMoveStartListener: OnCameraMoveHandler?
     private var cameraMoveListener: OnCameraMoveHandler?
@@ -74,11 +81,12 @@ final class MapLibreViewController: MapViewControllerProtocol {
         self.holder = AnyMapViewHolder(typedHolder)
     }
 
+    /// ``clearOverlays()`` の中身。オーバーレイのコントローラはホストが持っているので、
+    /// ホストが生成時に設定する（android-sdk と同じく、各コントローラの `clear()` を呼ぶ）。
+    var clearOverlaysHandler: (@MainActor () async -> Void)?
+
     func clearOverlays() async {
-        guard let mapView = mapView else { return }
-        if let annotations = mapView.annotations {
-            mapView.removeAnnotations(annotations)
-        }
+        await clearOverlaysHandler?()
     }
 
     func setCameraMoveStartListener(listener: OnCameraMoveHandler?) {
@@ -108,7 +116,9 @@ final class MapLibreViewController: MapViewControllerProtocol {
     func moveCamera(position: MapCameraPosition) {
         guard let mapView = mapView else { return }
         lastLogicalTilt = position.tilt
-        let cameraState = position.toMapLibreCameraState()
+        if let paddings = position.paddings { lastPaddings = paddings }
+        let requested = position.copy(paddings: lastPaddings ?? MapPaddings.Zeros)
+        let cameraState = paddingApplied(requested, to: mapView).toMapLibreCameraState()
 
         // ★ pitch を先に、zoom を後に当てる。順序を逆にすると**傾けるたびに地図が遠ざかる**。
         //
@@ -135,6 +145,7 @@ final class MapLibreViewController: MapViewControllerProtocol {
             direction: cameraState.bearing,
             animated: false
         )
+        scheduleCorrection(requested)
     }
 
     func animateCamera(position: MapCameraPosition, duration: Long) {
@@ -146,15 +157,98 @@ final class MapLibreViewController: MapViewControllerProtocol {
         }
 
         cameraAnimator?.stop()
+        // 補間は「地図に渡す中心」の空間で行う（from は地図の生の中心、to はずらした中心）。
         let from = mapView.toMapCameraPosition(logicalTiltHint: lastLogicalTilt)
         lastLogicalTilt = position.tilt
+        if let paddings = position.paddings { lastPaddings = paddings }
+        let requested = position.copy(paddings: lastPaddings ?? MapPaddings.Zeros)
         cameraAnimator = CameraAnimator(
             mapView: mapView,
             from: from,
-            to: position,
-            duration: durationSeconds
+            to: paddingApplied(requested, to: mapView),
+            duration: durationSeconds,
+            completion: { [weak self] in self?.scheduleCorrection(requested) }
         )
         cameraAnimator?.start()
+    }
+
+    /// 地図に渡すカメラ。パディングの分だけ中心をずらし、`contentInset` は使わない。
+    ///
+    /// 機能を入れる前と同じく `contentInset` は安全領域の自動調整に任せる。自動調整があると
+    /// 地図は安全領域の内側の中央を中心にするので、その分を差し引いてからずらす。
+    private func paddingApplied(_ requested: MapCameraPosition, to mapView: MLNMapView) -> MapCameraPosition {
+        Self.restoreAutomaticContentInset(on: mapView)
+        // パディングが無ければ従来どおり（安全領域の内側の中央が中心）。
+        guard let relative = Self.safeAreaRelative(requested.paddings, on: mapView) else {
+            return requested.copy(paddings: MapPaddings.Zeros)
+        }
+        return CameraPaddingEmulation.applied(
+            to: requested.copy(paddings: relative),
+            fov: mapLibreVerticalFieldOfView,
+            viewportSize: mapView.bounds.size
+        ).copy(paddings: MapPaddings.Zeros)
+    }
+
+    /// パディングを、地図が中心にしている安全領域の内側から測った値に直す。パディングが
+    /// 無い（全て 0）なら nil。
+    static func safeAreaRelative(_ paddings: MapPaddingsProtocol?, on mapView: MLNMapView) -> MapPaddings? {
+        guard let paddings,
+              paddings.top != 0 || paddings.left != 0 || paddings.bottom != 0 || paddings.right != 0 else { return nil }
+        let safe = mapView.contentInset
+        return MapPaddings(
+            top: paddings.top - safe.top,
+            left: paddings.left - safe.left,
+            bottom: paddings.bottom - safe.bottom,
+            right: paddings.right - safe.right
+        )
+    }
+
+    /// 以前のビルドが止めた安全領域の自動調整を戻す（パディングを `contentInset` で当てていた名残）。
+    fileprivate static func restoreAutomaticContentInset(on mapView: MLNMapView) {
+        guard !mapView.automaticallyAdjustsContentInset else { return }
+        mapView.automaticallyAdjustsContentInset = true
+        mapView.setContentInset(.zero, animated: false, completionHandler: nil)
+    }
+
+    /// 補正の世代。新しい移動が始まったら、前の移動の補正は捨てる。
+    private var correctionGeneration = 0
+
+    /// 補正は地図がカメラを描き終えてから測る（移動の直後は投影がまだ古い）。
+    private func scheduleCorrection(_ requested: MapCameraPosition) {
+        correctionGeneration += 1
+        let generation = correctionGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.correctPaddedTarget(requested, generation: generation)
+        }
+    }
+
+    /// 計算で置いた中心は、安全領域の調整や tilt の上限でわずかにずれる。地図の投影で実際の
+    /// 位置を測り、パディングの残りの中央に来るまで中心だけを動かし直す。
+    private func correctPaddedTarget(_ requested: MapCameraPosition, generation: Int, remaining: Int = 4) {
+        guard remaining > 0, generation == correctionGeneration, let mapView,
+              let desired = CameraPaddingEmulation.paddedCenterPoint(
+                  paddings: requested.paddings,
+                  viewportSize: mapView.bounds.size
+              ) else { return }
+        let actual = mapView.convert(
+            CLLocationCoordinate2D(latitude: requested.position.latitude, longitude: requested.position.longitude),
+            toPointTo: mapView
+        )
+        let deltaX = actual.x - desired.x
+        let deltaY = actual.y - desired.y
+        guard abs(deltaX) >= 0.5 || abs(deltaY) >= 0.5 else { return }
+        // 目標が画面の外（パディングが地図より大きい）なら、地図の投影が当てにならないので詰めない
+        // （Mapbox は画面外の点を (-1, -1) で返す）。
+        guard mapView.bounds.contains(actual) else { return }
+        let currentCenter = mapView.convert(mapView.centerCoordinate, toPointTo: mapView)
+        let center = mapView.convert(
+            CGPoint(x: currentCenter.x + deltaX, y: currentCenter.y + deltaY),
+            toCoordinateFrom: mapView
+        )
+        mapView.setCenter(center, animated: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.correctPaddedTarget(requested, generation: generation, remaining: remaining - 1)
+        }
     }
 
     func setCameraRestriction(_ restriction: CameraRestriction?) {
@@ -226,6 +320,7 @@ private final class CameraAnimator {
     private let from: MapCameraPosition
     private let to: MapCameraPosition
     private let duration: TimeInterval
+    private let completion: (() -> Void)?
     /// 中心とズームの補間。van Wijk（＝ android-for-maplibre の
     /// `map.animateCamera` が落ちる `NativeMap.flyTo` と同じ式）。
     /// ``FlyToZoomArc`` の説明を読むこと。
@@ -237,8 +332,10 @@ private final class CameraAnimator {
         mapView: MLNMapView,
         from: MapCameraPosition,
         to: MapCameraPosition,
-        duration: TimeInterval
+        duration: TimeInterval,
+        completion: (() -> Void)? = nil
     ) {
+        self.completion = completion
         self.mapView = mapView
         self.from = from
         self.to = to
@@ -304,6 +401,7 @@ private final class CameraAnimator {
 
         if t >= 1.0 {
             stop()
+            completion?()
         }
     }
 

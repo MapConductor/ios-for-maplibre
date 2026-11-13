@@ -7,13 +7,13 @@ let frameworkLibraryType: Product.Library.LibraryType? =
 let usingLocalCore = FileManager.default.fileExists(atPath: "../ios-sdk-core/Package.swift")
 let coreDependency: Package.Dependency = usingLocalCore
     ? .package(path: "../ios-sdk-core")
-    : .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.1.4")
+    : .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.4.0")
 
 let package = Package(
     name: "mapconductor-for-maplibre",
     platforms: [
         // See ios-sdk-core/Package.swift's comment: "15.0" must not be used here.
-        .iOS("15.1"),
+        .iOS("15.5"),
     ],
     products: [
         .library(
@@ -24,15 +24,27 @@ let package = Package(
     ],
     dependencies: [
         coreDependency,
-        .package(url: "https://github.com/maplibre/maplibre-gl-native-distribution", from: "6.20.0"),
+        .package(url: "https://github.com/maplibre/maplibre-gl-native-distribution", from: "7.0.0"),
     ],
     targets: [
+        // MapLibre's style API raises Objective-C exceptions, which Swift
+        // cannot catch. See the header.
+        .target(name: "CMapLibreStyleTry"),
         .target(
             name: "MapConductorForMapLibre",
             dependencies: [
+                "CMapLibreStyleTry",
                 .product(name: "MapConductorCore", package: "ios-sdk-core"),
                 .product(name: "MapLibre", package: "maplibre-gl-native-distribution"),
             ]
+        ),
+        // The vector style adapter is the one part of this provider that can
+        // be checked without a map on screen: a style layer is a real object
+        // before it is added to a style, so what reaches its properties can
+        // be read back.
+        .testTarget(
+            name: "MapConductorForMapLibreTests",
+            dependencies: ["MapConductorForMapLibre"]
         ),
     ]
 )

@@ -1,7 +1,12 @@
 import CoreLocation
 import Foundation
+import UIKit
 import MapLibre
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
+
+/// MapLibre のカメラの縦の視野角（度）。MapLibre Native の既定値（`2·atan(1/3)`）で、
+/// iPad Pro 11 の実測（tilt 30°〜60°）でも一致した。
+let mapLibreVerticalFieldOfView: Double = 36.87
 
 private let converter = MapLibreZoomAltitudeConverter()
 private let negativeTiltTargetDistanceScale = 1.83
@@ -42,7 +47,7 @@ extension MapCameraPosition {
             return MapLibreCameraState(
                 center: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
                 zoom: mapLibreZoom,
-                bearing: bearing,
+                bearing: CameraBearing.toNativeHeading(bearing),
                 tilt: tilt
             )
         }
@@ -54,7 +59,7 @@ extension MapCameraPosition {
         let maplibreZoomForAltitude = MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom(zoom)
         let altitude = converter.zoomLevelToAltitude(zoomLevel: maplibreZoomForAltitude, latitude: position.latitude, tilt: 0.0)
         let distanceForward = altitude * cos(tiltAbsRad) * tan(tiltAbsRad) * negativeTiltTargetDistanceScale
-        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: bearing)
+        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: CameraBearing.toNativeHeading(bearing))
         let adjustedZoom = zoom + negativeTiltZoomOffsetAtMaxTilt * (tiltAbsDeg / 60.0)
         
         let mapLibreZoom = MapLibreZoomAltitudeConverter.googleZoomToMaplibreZoom(adjustedZoom)
@@ -63,7 +68,7 @@ extension MapCameraPosition {
         return MapLibreCameraState(
             center: CLLocationCoordinate2D(latitude: target.latitude, longitude: target.longitude),
             zoom: mapLibreZoom,
-            bearing: bearing,
+            bearing: CameraBearing.toNativeHeading(bearing),
             tilt: tiltAbsDeg
         )
     }
@@ -82,7 +87,7 @@ extension MapLibreCameraState {
             return MapCameraPosition(
                 position: GeoPoint(latitude: center.latitude, longitude: center.longitude, altitude: 0),
                 zoom: MapLibreZoomAltitudeConverter.maplibreZoomToGoogleZoom(zoom),
-                bearing: bearing,
+                bearing: CameraBearing.bearingFromNativeHeading(bearing),
                 tilt: tilt,
                 visibleRegion: visibleRegion
             )
@@ -103,7 +108,7 @@ extension MapLibreCameraState {
         return MapCameraPosition(
             position: originalPosition,
             zoom: originalGoogleZoom,
-            bearing: bearing,
+            bearing: CameraBearing.bearingFromNativeHeading(bearing),
             tilt: -tiltAbsDeg,
             visibleRegion: visibleRegion
         )
@@ -120,6 +125,10 @@ extension MLNMapView {
             bearing: camera.heading,
             tilt: camera.pitch
         )
-        return state.toMapCameraPosition(logicalTiltHint: logicalTiltHint, visibleRegion: visibleRegion)
+        // 地図の生のカメラ（中心は地図が描いている中心）。パディングは中心をずらして再現しているので、
+        // ターゲットへ戻すのは呼び出し側（``CameraPaddingEmulation/restored``）。視野角は載せる。
+        return state.toMapCameraPosition(logicalTiltHint: logicalTiltHint, visibleRegion: visibleRegion).copy(
+            fov: mapLibreVerticalFieldOfView
+        )
     }
 }
