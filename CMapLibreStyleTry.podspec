@@ -1,12 +1,12 @@
 Pod::Spec.new do |s|
   s.name = "CMapLibreStyleTry"
-  s.version = "1.3.1"
+  s.version = "1.4.0"
   s.summary = "Objective-C exceptions from MapLibre's style API, caught for Swift."
   s.license = { :type => "Apache-2.0", :file => "LICENSE" }
   s.author = "MapConductor"
   s.homepage = "https://github.com/MapConductor/ios-for-maplibre"
   s.source = { :git => "https://github.com/MapConductor/ios-for-maplibre.git", :tag => s.version.to_s }
-  s.platform = :ios, "15.1"
+  s.platform = :ios, "15.5"
   # Its own pod for the same reason CTilePng is: `import CMapLibreStyleTry`
   # needs it to be a module, and Objective-C compiled *into* a Swift pod has
   # no module of its own. Swift Package Manager gives it one because it is a
